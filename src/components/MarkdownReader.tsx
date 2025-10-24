@@ -24,11 +24,107 @@ import {
 import {translateWord} from '../utils/llmService';
 import {ImageZoom} from './ImageZoom';
 import {splitMarkdownIntoChunks, MarkdownChunk} from '../utils/markdownPagination';
+import {File, Directory} from 'expo-file-system';
 
 interface MarkdownReaderProps {
   document: Document;
   onBack: () => void;
 }
+
+interface ImageRendererProps {
+  src: string;
+  folderPath: string;
+  style: any;
+  onPress: (uri: string) => void;
+}
+
+const ImageRenderer: React.FC<ImageRendererProps> = ({src, folderPath, style, onPress}) => {
+  const [imageData, setImageData] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string>('');
+
+  useEffect(() => {
+    const loadImage = async () => {
+      try {
+        if (src.startsWith('http')) {
+          setImageData(src);
+          setLoading(false);
+          return;
+        }
+
+        // Get the image filename from src
+        const imageName = src.replace(/^\/+/, '');
+
+        // List directory contents to find the image file (like documentService does)
+        const dir = new Directory(folderPath);
+        const items = dir.list();
+
+        // Find the file with matching name
+        let imageFile: File | null = null;
+        for (const item of items) {
+          if (item instanceof File && item.name === imageName) {
+            imageFile = item;
+            break;
+          }
+        }
+
+        if (!imageFile) {
+          setErrorMsg(`Image not found: ${imageName} in ${folderPath}`);
+          setLoading(false);
+          return;
+        }
+
+        // Read the file as bytes using the correct URI from the File object
+        const bytes = await imageFile.bytes();
+
+        // Convert bytes to base64
+        const base64 = btoa(
+          bytes.reduce((data, byte) => data + String.fromCharCode(byte), '')
+        );
+
+        if (!base64) {
+          setErrorMsg(`Empty file: ${imageName}`);
+          setLoading(false);
+          return;
+        }
+
+        // Determine mime type from extension
+        const ext = imageName.split('.').pop()?.toLowerCase();
+        const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
+
+        setImageData(`data:${mimeType};base64,${base64}`);
+        setLoading(false);
+      } catch (err: any) {
+        setErrorMsg(`Error: ${err?.message || 'Unknown'}\nSrc: ${src}`);
+        setLoading(false);
+      }
+    };
+
+    loadImage();
+  }, [src, folderPath]);
+
+  if (loading) {
+    return <ActivityIndicator size="small" />;
+  }
+
+  if (errorMsg || !imageData) {
+    return (
+      <View style={{padding: 10, backgroundColor: '#ffcccc', borderRadius: 5, marginVertical: 5}}>
+        <Text style={{color: '#cc0000', fontSize: 10}}>{errorMsg || `Failed: ${src}`}</Text>
+      </View>
+    );
+  }
+
+  return (
+    <TouchableOpacity onPress={() => onPress(imageData)}>
+      <Image
+        source={{uri: imageData}}
+        style={[style, {width: 300, height: 200}]}
+        resizeMode="contain"
+      />
+    </TouchableOpacity>
+  );
+};
 
 export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   document,
@@ -205,22 +301,6 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     }));
   };
 
-  const getImagePath = (src: string) => {
-    try {
-      if (src.startsWith('http')) {
-        return src;
-      }
-      // Resolve relative image paths to document folder
-      const folder = document.folderPath;
-      // Remove any double slashes
-      const cleanSrc = src.replace(/^\/+/, '');
-      return `${folder}/${cleanSrc}`;
-    } catch (error) {
-      console.error('Error getting image path:', error);
-      return '';
-    }
-  };
-
   const markdownStyles = useMemo(() => ({
     body: {
       color: theme.text,
@@ -276,21 +356,15 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const markdownRules = useMemo(() => ({
     image: (node: any) => {
       const src = node.attributes?.src || '';
-      const imageSource = getImagePath(src);
-
-      if (!imageSource) return null;
 
       return (
-        <TouchableOpacity
+        <ImageRenderer
           key={String(node.key)}
-          onPress={() => setSelectedImage(imageSource)}>
-          <Image
-            source={{uri: imageSource}}
-            style={markdownStyles.image}
-            resizeMode="contain"
-            onError={(e) => console.log('Image load error:', e.nativeEvent.error)}
-          />
-        </TouchableOpacity>
+          src={src}
+          folderPath={document.folderPath}
+          style={markdownStyles.image}
+          onPress={setSelectedImage}
+        />
       );
     },
   }), [markdownStyles.image, document.folderPath]);
