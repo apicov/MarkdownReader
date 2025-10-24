@@ -38,13 +38,13 @@ export const DocumentListScreen: React.FC<DocumentListScreenProps> = ({
     loadCachedDocuments();
   }, []);
 
-  // Only load documents when docs path changes
+  // Only load documents when docs path changes (skip initial mount)
   useEffect(() => {
-    if (!settingsLoading && settings.docsPath && settings.docsPath !== lastDocsPath) {
+    if (!settingsLoading && !initialLoading && settings.docsPath && settings.docsPath !== lastDocsPath) {
       loadDocuments();
       setLastDocsPath(settings.docsPath);
     }
-  }, [settings.docsPath, settingsLoading]);
+  }, [settings.docsPath, settingsLoading, initialLoading]);
 
   const loadCachedDocuments = async () => {
     try {
@@ -54,6 +54,8 @@ export const DocumentListScreen: React.FC<DocumentListScreenProps> = ({
       }
     } catch (error) {
       console.error('Error loading cached documents:', error);
+    } finally {
+      setInitialLoading(false);
     }
   };
 
