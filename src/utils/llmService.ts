@@ -10,18 +10,19 @@ export const translateWord = async (
   apiUrl: string,
   apiKey: string,
   model: string = '',
-  sourceLanguage: string = 'auto',
+  targetLanguage: string = 'Spanish',
 ): Promise<TranslationResult> => {
   try {
     const trimmedUrl = apiUrl?.trim();
     const trimmedKey = apiKey?.trim();
     const trimmedModel = model?.trim();
+    const trimmedTargetLanguage = targetLanguage?.trim() || 'Spanish';
 
     if (!trimmedUrl || !trimmedKey || !trimmedModel) {
       throw new Error('LLM API URL, Key, and Model must be configured in settings');
     }
 
-    const prompt = `Translate the word "${word}" to Spanish and provide a brief explanation in ${sourceLanguage}. Format your response as JSON with keys "translation" and "explanation".`;
+    const prompt = `Translate the word "${word}" to ${trimmedTargetLanguage} and provide a brief explanation in ${trimmedTargetLanguage}. Format your response as JSON with keys "translation" and "explanation".`;
 
     const response = await axios.post(
       trimmedUrl,

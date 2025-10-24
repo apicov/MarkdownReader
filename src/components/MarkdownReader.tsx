@@ -276,6 +276,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
         settings.llmApiUrl || '',
         settings.llmApiKey || '',
         settings.llmModel || '',
+        settings.targetLanguage || 'Spanish',
       );
 
       setTranslationModal(prev => ({

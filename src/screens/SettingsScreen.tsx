@@ -28,6 +28,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
   const [llmApiUrl, setLlmApiUrl] = useState(settings.llmApiUrl || '');
   const [llmApiKey, setLlmApiKey] = useState(settings.llmApiKey || '');
   const [llmModel, setLlmModel] = useState(settings.llmModel || '');
+  const [targetLanguage, setTargetLanguage] = useState(settings.targetLanguage || '');
 
   const handlePickFolder = async () => {
     try {
@@ -53,6 +54,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
       llmApiUrl,
       llmApiKey,
       llmModel,
+      targetLanguage,
     });
 
     Alert.alert('Settings Saved', 'Your settings have been updated successfully');
@@ -74,12 +76,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
             setLlmApiUrl('');
             setLlmApiKey('');
             setLlmModel('');
+            setTargetLanguage('');
             await updateSettings({
               docsPath: '',
               fontSize: 16,
               llmApiUrl: '',
               llmApiKey: '',
               llmModel: '',
+              targetLanguage: '',
             });
           },
         },
@@ -233,6 +237,29 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
           />
           <Text style={[styles.hint, {color: theme.text}]}>
             e.g., llama-3.3-70b-versatile (Groq) or gpt-4 (OpenAI)
+          </Text>
+
+          <Text style={[styles.label, {color: theme.text, marginTop: 16}]}>
+            Target Language
+          </Text>
+          <TextInput
+            style={[
+              styles.input,
+              {
+                color: theme.text,
+                borderColor: theme.border,
+                backgroundColor: isDarkMode ? '#1a0000' : '#f5f5f5',
+              },
+            ]}
+            value={targetLanguage}
+            onChangeText={setTargetLanguage}
+            placeholder="e.g., Italian, Spanish, French"
+            placeholderTextColor={isDarkMode ? '#660000' : '#999'}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <Text style={[styles.hint, {color: theme.text}]}>
+            Language to translate words into
           </Text>
         </View>
 
