@@ -252,7 +252,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   // Pinch gesture removed to fix native crash with ScrollView
   // TODO: Implement font size controls via buttons instead
 
-  const handleLongPress = async (word: string) => {
+  const handleLongPress = async (word: string, context?: string) => {
     try {
       console.log('Settings in MarkdownReader:', {
         hasUrl: !!settings.llmApiUrl,
@@ -277,6 +277,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
         settings.llmApiKey || '',
         settings.llmModel || '',
         settings.targetLanguage || 'Spanish',
+        context,
       );
 
       setTranslationModal(prev => ({
@@ -363,30 +364,54 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
       );
     },
     paragraph: (node: any, children: any) => {
-      const handleLongPressText = () => {
-        // Extract text from children recursively
-        const extractText = (child: any): string => {
-          if (typeof child === 'string') return child;
-          if (Array.isArray(child)) return child.map(extractText).join('');
-          if (child?.props?.children) return extractText(child.props.children);
-          return '';
-        };
-
-        const text = extractText(children).trim();
-        const words = text.split(/[\s.,;:!?()[\]{}'"]+/).filter((w: string) => w.length > 0);
-
-        if (words.length > 0) {
-          const word = words[0].replace(/[.,;:!?()[\]{}'"]/g, '');
-          if (word) {
-            handleLongPress(word);
-          }
-        }
+      // Extract text from children recursively
+      const extractText = (child: any): string => {
+        if (typeof child === 'string') return child;
+        if (Array.isArray(child)) return child.map(extractText).join('');
+        if (child?.props?.children) return extractText(child.props.children);
+        return '';
       };
 
+      const fullText = extractText(children).trim();
+
       return (
-        <Pressable key={String(node.key)} onLongPress={handleLongPressText}>
-          <Text style={markdownStyles.paragraph}>{children}</Text>
-        </Pressable>
+        <Text
+          key={String(node.key)}
+          style={markdownStyles.paragraph}
+          onLongPress={(event: any) => {
+            // Get the touch position within the text
+            const {locationX, pageX} = event.nativeEvent;
+
+            // Split text into words with their positions
+            const words = fullText.split(/(\s+)/).filter(w => w.trim().length > 0);
+
+            // For simplicity, we'll use text selection or just use the middle word
+            // Since React Native doesn't provide character-level touch detection easily,
+            // we'll estimate based on touch position
+            const charWidth = fontSize * 0.5; // Approximate character width
+            const charIndex = Math.floor(locationX / charWidth);
+
+            // Find word at character index
+            let currentIndex = 0;
+            let selectedWord = words[0] || '';
+
+            for (const word of words) {
+              if (charIndex >= currentIndex && charIndex < currentIndex + word.length) {
+                selectedWord = word;
+                break;
+              }
+              currentIndex += word.length + 1; // +1 for space
+            }
+
+            // Clean the selected word
+            const cleanWord = selectedWord.replace(/[.,;:!?()[\]{}'"]/g, '');
+
+            if (cleanWord) {
+              handleLongPress(cleanWord, fullText);
+            }
+          }}>
+          {children}
+        </Text>
       );
     },
   }), [markdownStyles.image, markdownStyles.paragraph, fileMap]);

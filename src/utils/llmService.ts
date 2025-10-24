@@ -11,6 +11,7 @@ export const translateWord = async (
   apiKey: string,
   model: string = '',
   targetLanguage: string = 'Spanish',
+  context?: string,
 ): Promise<TranslationResult> => {
   try {
     const trimmedUrl = apiUrl?.trim();
@@ -22,7 +23,9 @@ export const translateWord = async (
       throw new Error('LLM API URL, Key, and Model must be configured in settings');
     }
 
-    const prompt = `Translate the word "${word}" to ${trimmedTargetLanguage} and provide a brief explanation in ${trimmedTargetLanguage}. Format your response as JSON with keys "translation" and "explanation".`;
+    const prompt = context
+      ? `Translate the word "${word}" to ${trimmedTargetLanguage} and provide a brief explanation in ${trimmedTargetLanguage}. Context: "${context}". Format your response as JSON with keys "translation" and "explanation".`
+      : `Translate the word "${word}" to ${trimmedTargetLanguage} and provide a brief explanation in ${trimmedTargetLanguage}. Format your response as JSON with keys "translation" and "explanation".`;
 
     const response = await axios.post(
       trimmedUrl,
