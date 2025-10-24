@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "MarkdownReaderExpo",
+    "name": "Markdown Reader",
     "slug": "MarkdownReaderExpo",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -12,14 +12,25 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    "plugins": [
+      [
+        "expo-asset",
+        {
+          "assets": ["./assets/docs"]
+        }
+      ]
+    ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.markdownreader.app"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
+      "package": "com.markdownreader.app",
+      "permissions": ["READ_EXTERNAL_STORAGE"],
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
