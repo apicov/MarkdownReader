@@ -34,7 +34,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   document,
   onBack,
 }) => {
-  const {theme} = useTheme();
+  const {theme, isDarkMode, toggleTheme} = useTheme();
   const {settings, updateSettings} = useSettings();
   const [content, setContent] = useState('');
   const [chunks, setChunks] = useState<MarkdownChunk[]>([]);
@@ -49,6 +49,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     explanation: '',
     loading: false,
   });
+  const [fontSizeModalVisible, setFontSizeModalVisible] = useState(false);
 
   const scrollViewRef = useRef<ScrollView>(null);
   const lastScrollOffset = useRef(0);
@@ -307,6 +308,16 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
           numberOfLines={1}>
           {document.title}
         </Text>
+        <TouchableOpacity onPress={() => setFontSizeModalVisible(true)} style={styles.themeButton}>
+          <Text style={[styles.themeButtonText, {color: theme.accent}]}>
+            Aa
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={toggleTheme} style={styles.themeButton}>
+          <Text style={[styles.themeButtonText, {color: theme.accent}]}>
+            {isDarkMode ? '☀️' : '🌙'}
+          </Text>
+        </TouchableOpacity>
       </View>
 
         {!isReady ? (
@@ -431,6 +442,47 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
             </View>
           </TouchableOpacity>
         </Modal>
+
+        <Modal
+          visible={fontSizeModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setFontSizeModalVisible(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setFontSizeModalVisible(false)}>
+            <View
+              style={[
+                styles.fontSizeModal,
+                {backgroundColor: theme.background, borderColor: theme.border},
+              ]}>
+              <Text style={[styles.modalLabel, {color: theme.text, marginBottom: 20}]}>
+                Font Size: {fontSize}
+              </Text>
+              <View style={styles.fontSizeButtons}>
+                <TouchableOpacity
+                  style={[styles.fontSizeButton, {backgroundColor: theme.accent}]}
+                  onPress={() => {
+                    const newSize = Math.max(12, fontSize - 2);
+                    setFontSize(newSize);
+                    updateSettings({fontSize: newSize});
+                  }}>
+                  <Text style={styles.fontSizeButtonText}>-</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.fontSizeButton, {backgroundColor: theme.accent}]}
+                  onPress={() => {
+                    const newSize = Math.min(32, fontSize + 2);
+                    setFontSize(newSize);
+                    updateSettings({fontSize: newSize});
+                  }}>
+                  <Text style={styles.fontSizeButtonText}>+</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableOpacity>
+        </Modal>
       </View>
   );
 };
@@ -442,8 +494,9 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    paddingTop: 48,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    paddingTop: 32,
   },
   backButton: {
     marginRight: 12,
@@ -482,7 +535,7 @@ const styles = StyleSheet.create({
   },
   scrollView: {
     flex: 1,
-    paddingHorizontal: 20,
+    paddingHorizontal: 5,
   },
   modalOverlay: {
     flex: 1,
@@ -516,8 +569,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 12,
-    paddingBottom: 8,
+    paddingTop: 4,
+    paddingBottom: 2,
     paddingHorizontal: 16,
   },
   chunkButton: {
@@ -533,5 +586,35 @@ const styles = StyleSheet.create({
   chunkText: {
     fontSize: 12,
     opacity: 0.6,
+  },
+  themeButton: {
+    padding: 8,
+    marginLeft: 8,
+  },
+  themeButtonText: {
+    fontSize: 24,
+  },
+  fontSizeModal: {
+    width: '80%',
+    padding: 20,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  fontSizeButtons: {
+    flexDirection: 'row',
+    gap: 20,
+  },
+  fontSizeButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fontSizeButtonText: {
+    color: '#FFFFFF',
+    fontSize: 32,
+    fontWeight: 'bold',
   },
 });
