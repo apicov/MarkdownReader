@@ -451,6 +451,42 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
           </Text>
         );
       },
+      heading4: (node: any, children: any) => {
+        const fullText = extractText(children).trim();
+
+        return (
+          <Text
+            key={String(node.key)}
+            style={[markdownStyles.heading3, {fontSize: fontSize * 1.2}]}
+            onLongPress={createLongPressHandler(fullText)}>
+            {children}
+          </Text>
+        );
+      },
+      heading5: (node: any, children: any) => {
+        const fullText = extractText(children).trim();
+
+        return (
+          <Text
+            key={String(node.key)}
+            style={[markdownStyles.heading3, {fontSize: fontSize * 1.1}]}
+            onLongPress={createLongPressHandler(fullText)}>
+            {children}
+          </Text>
+        );
+      },
+      heading6: (node: any, children: any) => {
+        const fullText = extractText(children).trim();
+
+        return (
+          <Text
+            key={String(node.key)}
+            style={markdownStyles.heading3}
+            onLongPress={createLongPressHandler(fullText)}>
+            {children}
+          </Text>
+        );
+      },
       strong: (node: any, children: any) => {
         const fullText = extractText(children).trim();
 
@@ -475,8 +511,17 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
           </Text>
         );
       },
-      textgroup: (node: any, children: any) => {
+      textgroup: (node: any, children: any, parent: any) => {
         const fullText = extractText(children).trim();
+
+        // Only add onLongPress if parent doesn't already have it
+        // (to avoid conflicts with heading/paragraph handlers)
+        const parentType = parent?.[0]?.type;
+        const skipLongPress = ['heading1', 'heading2', 'heading3', 'heading4', 'heading5', 'heading6', 'paragraph'].includes(parentType);
+
+        if (skipLongPress) {
+          return <Text key={String(node.key)}>{children}</Text>;
+        }
 
         return (
           <Text
