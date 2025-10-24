@@ -33,81 +33,36 @@ interface MarkdownReaderProps {
 
 interface ImageRendererProps {
   src: string;
-  folderPath: string;
+  fileMap: Map<string, string>;
   style: any;
   onPress: (uri: string) => void;
 }
 
-const ImageRenderer: React.FC<ImageRendererProps> = ({src, folderPath, style, onPress}) => {
-  const [imageData, setImageData] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+const ImageRenderer: React.FC<ImageRendererProps> = ({src, fileMap, style, onPress}) => {
+  const [imageUri, setImageUri] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>('');
 
   useEffect(() => {
-    const loadImage = async () => {
-      try {
-        if (src.startsWith('http')) {
-          setImageData(src);
-          setLoading(false);
-          return;
-        }
+    if (src.startsWith('http')) {
+      setImageUri(src);
+      return;
+    }
 
-        // Get the image filename from src
-        const imageName = src.replace(/^\/+/, '');
+    // Get the image filename from src
+    const imageName = src.replace(/^\/+/, '');
 
-        // List directory contents to find the image file (like documentService does)
-        const dir = new Directory(folderPath);
-        const items = dir.list();
+    // Look up in the pre-built file map - instant O(1) lookup!
+    const uri = fileMap.get(imageName);
 
-        // Find the file with matching name
-        let imageFile: File | null = null;
-        for (const item of items) {
-          if (item instanceof File && item.name === imageName) {
-            imageFile = item;
-            break;
-          }
-        }
+    if (!uri) {
+      setErrorMsg(`Image not found: ${imageName}`);
+      return;
+    }
 
-        if (!imageFile) {
-          setErrorMsg(`Image not found: ${imageName} in ${folderPath}`);
-          setLoading(false);
-          return;
-        }
+    setImageUri(uri);
+  }, [src, fileMap]);
 
-        // Read the file as bytes using the correct URI from the File object
-        const bytes = await imageFile.bytes();
-
-        // Convert bytes to base64
-        const base64 = btoa(
-          bytes.reduce((data, byte) => data + String.fromCharCode(byte), '')
-        );
-
-        if (!base64) {
-          setErrorMsg(`Empty file: ${imageName}`);
-          setLoading(false);
-          return;
-        }
-
-        // Determine mime type from extension
-        const ext = imageName.split('.').pop()?.toLowerCase();
-        const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
-
-        setImageData(`data:${mimeType};base64,${base64}`);
-        setLoading(false);
-      } catch (err: any) {
-        setErrorMsg(`Error: ${err?.message || 'Unknown'}\nSrc: ${src}`);
-        setLoading(false);
-      }
-    };
-
-    loadImage();
-  }, [src, folderPath]);
-
-  if (loading) {
-    return <ActivityIndicator size="small" />;
-  }
-
-  if (errorMsg || !imageData) {
+  if (errorMsg || !imageUri) {
     return (
       <View style={{padding: 10, backgroundColor: '#ffcccc', borderRadius: 5, marginVertical: 5}}>
         <Text style={{color: '#cc0000', fontSize: 10}}>{errorMsg || `Failed: ${src}`}</Text>
@@ -116,9 +71,9 @@ const ImageRenderer: React.FC<ImageRendererProps> = ({src, folderPath, style, on
   }
 
   return (
-    <TouchableOpacity onPress={() => onPress(imageData)}>
+    <TouchableOpacity onPress={() => onPress(imageUri)}>
       <Image
-        source={{uri: imageData}}
+        source={{uri: imageUri}}
         style={[style, {width: 300, height: 200}]}
         resizeMode="contain"
       />
@@ -146,6 +101,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     loading: false,
   });
   const [fontSizeModalVisible, setFontSizeModalVisible] = useState(false);
+  const [fileMap, setFileMap] = useState<Map<string, string>>(new Map());
 
   const scrollViewRef = useRef<ScrollView>(null);
   const lastScrollOffset = useRef(0);
@@ -168,6 +124,17 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     hasRestoredPosition.current = false;
     isUserInteracting.current = false;
     try {
+      // Build file map for fast image lookups
+      const dir = new Directory(document.folderPath);
+      const items = dir.list();
+      const map = new Map<string, string>();
+      for (const item of items) {
+        if (item instanceof File) {
+          map.set(item.name, item.uri);
+        }
+      }
+      setFileMap(map);
+
       // Parallelize file read and position read
       const [md, position] = await Promise.all([
         readMarkdownFile(document.markdownFile),
@@ -361,13 +328,13 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
         <ImageRenderer
           key={String(node.key)}
           src={src}
-          folderPath={document.folderPath}
+          fileMap={fileMap}
           style={markdownStyles.image}
           onPress={setSelectedImage}
         />
       );
     },
-  }), [markdownStyles.image, document.folderPath]);
+  }), [markdownStyles.image, fileMap]);
 
   return (
     <View style={[styles.container, {backgroundColor: theme.background}]}>
