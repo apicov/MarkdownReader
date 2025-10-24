@@ -349,72 +349,145 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     },
   }), [theme.text, theme.border, theme.accent, fontSize]);
 
-  const markdownRules = useMemo(() => ({
-    image: (node: any) => {
-      const src = node.attributes?.src || '';
+  const markdownRules = useMemo(() => {
+    // Shared function to extract text from children recursively
+    const extractText = (child: any): string => {
+      if (typeof child === 'string') return child;
+      if (Array.isArray(child)) return child.map(extractText).join('');
+      if (child?.props?.children) return extractText(child.props.children);
+      return '';
+    };
 
-      return (
-        <ImageRenderer
-          key={String(node.key)}
-          src={src}
-          fileMap={fileMap}
-          style={markdownStyles.image}
-          onPress={setSelectedImage}
-        />
-      );
-    },
-    paragraph: (node: any, children: any) => {
-      // Extract text from children recursively
-      const extractText = (child: any): string => {
-        if (typeof child === 'string') return child;
-        if (Array.isArray(child)) return child.map(extractText).join('');
-        if (child?.props?.children) return extractText(child.props.children);
-        return '';
-      };
+    // Shared long-press handler creator
+    const createLongPressHandler = (fullText: string) => (event: any) => {
+      const {locationX} = event.nativeEvent;
 
-      const fullText = extractText(children).trim();
+      // Split text into words with their positions
+      const words = fullText.split(/(\s+)/).filter(w => w.trim().length > 0);
 
-      return (
-        <Text
-          key={String(node.key)}
-          style={markdownStyles.paragraph}
-          onLongPress={(event: any) => {
-            // Get the touch position within the text
-            const {locationX, pageX} = event.nativeEvent;
+      // Estimate character width based on font size
+      const charWidth = fontSize * 0.5; // Approximate character width
+      const charIndex = Math.floor(locationX / charWidth);
 
-            // Split text into words with their positions
-            const words = fullText.split(/(\s+)/).filter(w => w.trim().length > 0);
+      // Find word at character index
+      let currentIndex = 0;
+      let selectedWord = words[0] || '';
 
-            // For simplicity, we'll use text selection or just use the middle word
-            // Since React Native doesn't provide character-level touch detection easily,
-            // we'll estimate based on touch position
-            const charWidth = fontSize * 0.5; // Approximate character width
-            const charIndex = Math.floor(locationX / charWidth);
+      for (const word of words) {
+        if (charIndex >= currentIndex && charIndex < currentIndex + word.length) {
+          selectedWord = word;
+          break;
+        }
+        currentIndex += word.length + 1; // +1 for space
+      }
 
-            // Find word at character index
-            let currentIndex = 0;
-            let selectedWord = words[0] || '';
+      // Clean the selected word
+      const cleanWord = selectedWord.replace(/[.,;:!?()[\]{}'"]/g, '');
 
-            for (const word of words) {
-              if (charIndex >= currentIndex && charIndex < currentIndex + word.length) {
-                selectedWord = word;
-                break;
-              }
-              currentIndex += word.length + 1; // +1 for space
-            }
+      if (cleanWord) {
+        handleLongPress(cleanWord, fullText);
+      }
+    };
 
-            // Clean the selected word
-            const cleanWord = selectedWord.replace(/[.,;:!?()[\]{}'"]/g, '');
+    return {
+      image: (node: any) => {
+        const src = node.attributes?.src || '';
 
-            if (cleanWord) {
-              handleLongPress(cleanWord, fullText);
-            }
-          }}>
-          {children}
-        </Text>
-      );
-    },
-  }), [markdownStyles.image, markdownStyles.paragraph, fileMap]);
+        return (
+          <ImageRenderer
+            key={String(node.key)}
+            src={src}
+            fileMap={fileMap}
+            style={markdownStyles.image}
+            onPress={setSelectedImage}
+          />
+        );
+      },
+      paragraph: (node: any, children: any) => {
+        const fullText = extractText(children).trim();
+
+        return (
+          <Text
+            key={String(node.key)}
+            style={markdownStyles.paragraph}
+            onLongPress={createLongPressHandler(fullText)}>
+            {children}
+          </Text>
+        );
+      },
+      heading1: (node: any, children: any) => {
+        const fullText = extractText(children).trim();
+
+        return (
+          <Text
+            key={String(node.key)}
+            style={markdownStyles.heading1}
+            onLongPress={createLongPressHandler(fullText)}>
+            {children}
+          </Text>
+        );
+      },
+      heading2: (node: any, children: any) => {
+        const fullText = extractText(children).trim();
+
+        return (
+          <Text
+            key={String(node.key)}
+            style={markdownStyles.heading2}
+            onLongPress={createLongPressHandler(fullText)}>
+            {children}
+          </Text>
+        );
+      },
+      heading3: (node: any, children: any) => {
+        const fullText = extractText(children).trim();
+
+        return (
+          <Text
+            key={String(node.key)}
+            style={markdownStyles.heading3}
+            onLongPress={createLongPressHandler(fullText)}>
+            {children}
+          </Text>
+        );
+      },
+      strong: (node: any, children: any) => {
+        const fullText = extractText(children).trim();
+
+        return (
+          <Text
+            key={String(node.key)}
+            style={{fontWeight: 'bold'}}
+            onLongPress={createLongPressHandler(fullText)}>
+            {children}
+          </Text>
+        );
+      },
+      em: (node: any, children: any) => {
+        const fullText = extractText(children).trim();
+
+        return (
+          <Text
+            key={String(node.key)}
+            style={{fontStyle: 'italic'}}
+            onLongPress={createLongPressHandler(fullText)}>
+            {children}
+          </Text>
+        );
+      },
+      textgroup: (node: any, children: any) => {
+        const fullText = extractText(children).trim();
+
+        return (
+          <Text
+            key={String(node.key)}
+            onLongPress={createLongPressHandler(fullText)}>
+            {children}
+          </Text>
+        );
+      },
+    };
+  }, [markdownStyles.image, markdownStyles.paragraph, markdownStyles.heading1, markdownStyles.heading2, markdownStyles.heading3, fileMap, fontSize, theme.text]);
 
   return (
     <View style={[styles.container, {backgroundColor: theme.background}]}>
