@@ -6,7 +6,9 @@ import {
   TouchableOpacity,
   StyleSheet,
   StatusBar,
+  Alert,
 } from 'react-native';
+import * as DocumentPicker from 'expo-document-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useTheme} from '../contexts/ThemeContext';
 import {useSettings} from '../contexts/SettingsContext';
@@ -68,6 +70,36 @@ export const DocumentListScreen: React.FC<DocumentListScreenProps> = ({
     setLoading(false);
   };
 
+  const handleOpenFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'text/*',
+        copyToCacheDirectory: false,
+      });
+
+      if (result.canceled) {
+        return;
+      }
+
+      if (result.assets && result.assets.length > 0) {
+        const file = result.assets[0];
+        // Extract folder path from file URI
+        const folderPath = file.uri.substring(0, file.uri.lastIndexOf('/'));
+        // Create a temporary document object for the selected file
+        const tempDoc: Document = {
+          id: file.uri,
+          title: file.name,
+          folderPath: folderPath,
+          markdownFile: file.uri,
+        };
+        onDocumentSelect(tempDoc);
+      }
+    } catch (error) {
+      console.error('File picker error:', error);
+      Alert.alert('Error', 'Failed to open file');
+    }
+  };
+
   const renderDocument = ({item}: {item: Document}) => (
     <TouchableOpacity
       style={[styles.documentItem, {borderBottomColor: theme.border}]}
@@ -89,6 +121,11 @@ export const DocumentListScreen: React.FC<DocumentListScreenProps> = ({
           Markdown Reader
         </Text>
         <View style={styles.headerButtons}>
+          <TouchableOpacity onPress={handleOpenFile} style={styles.headerButton}>
+            <Text style={[styles.headerButtonText, {color: theme.accent}]}>
+              📄
+            </Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={loadDocuments} style={styles.headerButton}>
             <Text style={[styles.headerButtonText, {color: theme.accent}]}>
               🔄

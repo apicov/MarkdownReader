@@ -125,13 +125,19 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     isUserInteracting.current = false;
     try {
       // Build file map for fast image lookups
-      const dir = new Directory(document.folderPath);
-      const items = dir.list();
       const map = new Map<string, string>();
-      for (const item of items) {
-        if (item instanceof File) {
-          map.set(item.name, item.uri);
+      try {
+        const dir = new Directory(document.folderPath);
+        const items = dir.list();
+        for (const item of items) {
+          if (item instanceof File) {
+            map.set(item.name, item.uri);
+          }
         }
+      } catch (error) {
+        // Folder can't be listed (e.g., when opening a single file)
+        // Images won't work but document can still be read
+        console.log('Could not list folder contents:', error);
       }
       setFileMap(map);
 
