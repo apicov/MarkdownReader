@@ -20,6 +20,7 @@ const defaultSettings: AppSettings = {
   docsPath: '', // User must select a folder from device
   llmApiUrl: '',
   llmApiKey: '',
+  llmModel: '',
 };
 
 const SettingsContext = createContext<SettingsContextType | undefined>(
@@ -40,7 +41,9 @@ export const SettingsProvider: React.FC<{children: ReactNode}> = ({
     try {
       const stored = await AsyncStorage.getItem('appSettings');
       if (stored) {
-        setSettings(JSON.parse(stored));
+        const parsed = JSON.parse(stored);
+        // Merge with defaults to ensure new fields are present
+        setSettings({...defaultSettings, ...parsed});
       }
     } catch (error) {
       console.error('Failed to load settings:', error);

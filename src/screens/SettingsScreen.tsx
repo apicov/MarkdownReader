@@ -8,6 +8,8 @@ import {
   ScrollView,
   StatusBar,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import {Directory} from 'expo-file-system';
 import {useTheme} from '../contexts/ThemeContext';
@@ -25,6 +27,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
   const [fontSize, setFontSize] = useState(settings.fontSize.toString());
   const [llmApiUrl, setLlmApiUrl] = useState(settings.llmApiUrl || '');
   const [llmApiKey, setLlmApiKey] = useState(settings.llmApiKey || '');
+  const [llmModel, setLlmModel] = useState(settings.llmModel || '');
 
   const handlePickFolder = async () => {
     try {
@@ -49,6 +52,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
       fontSize: fontSizeNum,
       llmApiUrl,
       llmApiKey,
+      llmModel,
     });
 
     Alert.alert('Settings Saved', 'Your settings have been updated successfully');
@@ -69,11 +73,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
             setFontSize('16');
             setLlmApiUrl('');
             setLlmApiKey('');
+            setLlmModel('');
             await updateSettings({
               docsPath: '',
               fontSize: 16,
               llmApiUrl: '',
               llmApiKey: '',
+              llmModel: '',
             });
           },
         },
@@ -82,7 +88,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
   };
 
   return (
-    <View style={[styles.container, {backgroundColor: theme.background}]}>
+    <KeyboardAvoidingView
+      style={[styles.container, {backgroundColor: theme.background}]}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}>
       <StatusBar
         barStyle={isDarkMode ? 'light-content' : 'dark-content'}
         backgroundColor={theme.background}
@@ -96,7 +105,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
         <Text style={[styles.headerTitle, {color: theme.text}]}>Settings</Text>
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={styles.contentContainer}
+        keyboardShouldPersistTaps="handled">
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, {color: theme.text}]}>
             Documents
@@ -199,6 +211,29 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
           <Text style={[styles.hint, {color: theme.text}]}>
             Required for long-press word translation feature
           </Text>
+
+          <Text style={[styles.label, {color: theme.text, marginTop: 16}]}>
+            Model
+          </Text>
+          <TextInput
+            style={[
+              styles.input,
+              {
+                color: theme.text,
+                borderColor: theme.border,
+                backgroundColor: isDarkMode ? '#1a0000' : '#f5f5f5',
+              },
+            ]}
+            value={llmModel}
+            onChangeText={setLlmModel}
+            placeholder="Model name"
+            placeholderTextColor={isDarkMode ? '#660000' : '#999'}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <Text style={[styles.hint, {color: theme.text}]}>
+            e.g., llama-3.3-70b-versatile (Groq) or gpt-4 (OpenAI)
+          </Text>
         </View>
 
         <View style={styles.buttonContainer}>
@@ -221,7 +256,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
           </TouchableOpacity>
         </View>
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 

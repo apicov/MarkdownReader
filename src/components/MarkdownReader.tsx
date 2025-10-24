@@ -9,6 +9,7 @@ import {
   Text,
   ActivityIndicator,
   Image,
+  Pressable,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 // Gesture handler removed - was causing native crashes with ScrollView
@@ -252,26 +253,46 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   // TODO: Implement font size controls via buttons instead
 
   const handleLongPress = async (word: string) => {
-    setTranslationModal({
-      visible: true,
-      word,
-      translation: '',
-      explanation: '',
-      loading: true,
-    });
+    try {
+      console.log('Settings in MarkdownReader:', {
+        hasUrl: !!settings.llmApiUrl,
+        hasKey: !!settings.llmApiKey,
+        urlLength: settings.llmApiUrl?.length,
+        keyLength: settings.llmApiKey?.length,
+        url: settings.llmApiUrl,
+        key: settings.llmApiKey,
+      });
 
-    const result = await translateWord(
-      word,
-      settings.llmApiUrl || '',
-      settings.llmApiKey || '',
-    );
+      setTranslationModal({
+        visible: true,
+        word,
+        translation: '',
+        explanation: '',
+        loading: true,
+      });
 
-    setTranslationModal(prev => ({
-      ...prev,
-      translation: result.translation,
-      explanation: result.explanation,
-      loading: false,
-    }));
+      const result = await translateWord(
+        word,
+        settings.llmApiUrl || '',
+        settings.llmApiKey || '',
+        settings.llmModel || '',
+      );
+
+      setTranslationModal(prev => ({
+        ...prev,
+        translation: result.translation,
+        explanation: result.explanation,
+        loading: false,
+      }));
+    } catch (error) {
+      console.error('Long press handler error:', error);
+      setTranslationModal(prev => ({
+        ...prev,
+        translation: 'Error',
+        explanation: 'Failed to translate. Please configure API settings.',
+        loading: false,
+      }));
+    }
   };
 
   const markdownStyles = useMemo(() => ({
@@ -340,7 +361,34 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
         />
       );
     },
-  }), [markdownStyles.image, fileMap]);
+    paragraph: (node: any, children: any) => {
+      const handleLongPressText = () => {
+        // Extract text from children recursively
+        const extractText = (child: any): string => {
+          if (typeof child === 'string') return child;
+          if (Array.isArray(child)) return child.map(extractText).join('');
+          if (child?.props?.children) return extractText(child.props.children);
+          return '';
+        };
+
+        const text = extractText(children).trim();
+        const words = text.split(/[\s.,;:!?()[\]{}'"]+/).filter((w: string) => w.length > 0);
+
+        if (words.length > 0) {
+          const word = words[0].replace(/[.,;:!?()[\]{}'"]/g, '');
+          if (word) {
+            handleLongPress(word);
+          }
+        }
+      };
+
+      return (
+        <Pressable key={String(node.key)} onLongPress={handleLongPressText}>
+          <Text style={markdownStyles.paragraph}>{children}</Text>
+        </Pressable>
+      );
+    },
+  }), [markdownStyles.image, markdownStyles.paragraph, fileMap]);
 
   return (
     <View style={[styles.container, {backgroundColor: theme.background}]}>

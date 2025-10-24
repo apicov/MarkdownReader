@@ -25,4 +25,5 @@ export interface AppSettings {
   docsPath: string;
   llmApiUrl?: string;
   llmApiKey?: string;
+  llmModel?: string;
 }

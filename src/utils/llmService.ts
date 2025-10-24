@@ -9,19 +9,24 @@ export const translateWord = async (
   word: string,
   apiUrl: string,
   apiKey: string,
+  model: string = '',
   sourceLanguage: string = 'auto',
 ): Promise<TranslationResult> => {
   try {
-    if (!apiUrl || !apiKey) {
-      throw new Error('LLM API URL and Key must be configured in settings');
+    const trimmedUrl = apiUrl?.trim();
+    const trimmedKey = apiKey?.trim();
+    const trimmedModel = model?.trim();
+
+    if (!trimmedUrl || !trimmedKey || !trimmedModel) {
+      throw new Error('LLM API URL, Key, and Model must be configured in settings');
     }
 
     const prompt = `Translate the word "${word}" to Spanish and provide a brief explanation in ${sourceLanguage}. Format your response as JSON with keys "translation" and "explanation".`;
 
     const response = await axios.post(
-      apiUrl,
+      trimmedUrl,
       {
-        model: 'gpt-4',
+        model: trimmedModel,
         messages: [
           {
             role: 'user',
@@ -33,7 +38,7 @@ export const translateWord = async (
       {
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${trimmedKey}`,
         },
         timeout: 10000,
       },
@@ -46,11 +51,14 @@ export const translateWord = async (
       translation: parsed.translation || 'Translation not available',
       explanation: parsed.explanation || 'Explanation not available',
     };
-  } catch (error) {
+  } catch (error: any) {
     console.error('Translation error:', error);
+    console.error('API URL:', apiUrl);
+    console.error('API Key:', apiKey);
+    const errorMsg = error?.response?.data?.error?.message || error?.message || 'Unknown error';
     return {
       translation: 'Error',
-      explanation: 'Failed to translate. Check your API settings.',
+      explanation: `Failed: ${errorMsg}. URL: ${apiUrl}, Key: ${apiKey}`,
     };
   }
 };
