@@ -7,10 +7,13 @@ import {
   StyleSheet,
   StatusBar,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useTheme} from '../contexts/ThemeContext';
 import {useSettings} from '../contexts/SettingsContext';
 import {Document} from '../types';
 import {getDocuments} from '../utils/documentService';
+
+const DOCUMENTS_CACHE_KEY = '@documents_cache';
 
 interface DocumentListScreenProps {
   onDocumentSelect: (doc: Document) => void;
@@ -24,19 +27,41 @@ export const DocumentListScreen: React.FC<DocumentListScreenProps> = ({
   const {theme, isDarkMode, toggleTheme} = useTheme();
   const {settings, isLoading: settingsLoading} = useSettings();
   const [documents, setDocuments] = useState<Document[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [lastDocsPath, setLastDocsPath] = useState<string>('');
 
+  // Load cached documents on mount
   useEffect(() => {
-    if (!settingsLoading) {
+    loadCachedDocuments();
+  }, []);
+
+  // Only load documents when docs path changes
+  useEffect(() => {
+    if (!settingsLoading && settings.docsPath && settings.docsPath !== lastDocsPath) {
       loadDocuments();
+      setLastDocsPath(settings.docsPath);
     }
   }, [settings.docsPath, settingsLoading]);
 
-  const loadDocuments = () => {
+  const loadCachedDocuments = async () => {
+    try {
+      const cached = await AsyncStorage.getItem(DOCUMENTS_CACHE_KEY);
+      if (cached) {
+        setDocuments(JSON.parse(cached));
+      }
+    } catch (error) {
+      console.error('Error loading cached documents:', error);
+    }
+  };
+
+  const loadDocuments = async () => {
     setLoading(true);
     try {
       const docs = getDocuments(settings.docsPath);
       setDocuments(docs);
+      // Save to cache
+      await AsyncStorage.setItem(DOCUMENTS_CACHE_KEY, JSON.stringify(docs));
     } catch (error) {
       console.error('Error loading documents:', error);
     }
@@ -64,6 +89,11 @@ export const DocumentListScreen: React.FC<DocumentListScreenProps> = ({
           Markdown Reader
         </Text>
         <View style={styles.headerButtons}>
+          <TouchableOpacity onPress={loadDocuments} style={styles.headerButton}>
+            <Text style={[styles.headerButtonText, {color: theme.accent}]}>
+              🔄
+            </Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={toggleTheme} style={styles.headerButton}>
             <Text style={[styles.headerButtonText, {color: theme.accent}]}>
               {isDarkMode ? '☀️' : '🌙'}
@@ -92,16 +122,9 @@ export const DocumentListScreen: React.FC<DocumentListScreenProps> = ({
           </Text>
           <Text style={[styles.emptySubtext, {color: theme.text}]}>
             {settings.docsPath
-              ? `No markdown folders found in:\n${settings.docsPath}`
+              ? 'Tap the 🔄 button to scan for documents'
               : 'Tap the ⚙️ icon and select a folder from your phone'}
           </Text>
-          {!settings.docsPath && (
-            <TouchableOpacity
-              style={[styles.setupButton, {backgroundColor: theme.accent}]}
-              onPress={onOpenSettings}>
-              <Text style={styles.setupButtonText}>Open Settings</Text>
-            </TouchableOpacity>
-          )}
         </View>
       ) : (
         <FlatList
