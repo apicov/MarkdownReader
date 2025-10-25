@@ -10,11 +10,14 @@ interface WebViewMarkdownReaderProps {
   baseUrl?: string;
   onTextSelected?: (text: string) => void;
   onImageModalStateChange?: (isOpen: boolean) => void;
+  onWebViewLoaded?: () => void;
 }
 
 export interface WebViewMarkdownReaderRef {
   closeImageModal: () => boolean;
   scrollPage: (direction: 'up' | 'down') => void;
+  getScrollPosition: () => Promise<number>;
+  scrollToPosition: (position: number) => void;
 }
 
 export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebViewMarkdownReaderProps>(({
@@ -23,6 +26,7 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
   baseUrl = '',
   onTextSelected,
   onImageModalStateChange,
+  onWebViewLoaded,
 }, ref) => {
   const {theme} = useTheme();
   const webViewRef = useRef<WebView>(null);
@@ -421,6 +425,8 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     }
   };
 
+  const scrollPositionResolverRef = useRef<((position: number) => void) | null>(null);
+
   const handleMessage = (event: any) => {
     try {
       const data = JSON.parse(event.nativeEvent.data);
@@ -434,6 +440,11 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
           loadImagesAsync(pendingImagesRef.current);
           pendingImagesRef.current = null;
         }
+
+        // Notify parent that WebView is fully loaded and ready for scroll restoration
+        if (onWebViewLoaded) {
+          onWebViewLoaded();
+        }
       } else if (data.type === 'textSelected' && onTextSelected) {
         onTextSelected(data.text);
       } else if (data.type === 'imageModalStateChanged') {
@@ -441,6 +452,9 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
         if (onImageModalStateChange) {
           onImageModalStateChange(data.isOpen);
         }
+      } else if (data.type === 'scrollPosition' && scrollPositionResolverRef.current) {
+        scrollPositionResolverRef.current(data.position);
+        scrollPositionResolverRef.current = null;
       }
     } catch (error) {
       console.error('Error parsing WebView message:', error);
@@ -474,10 +488,67 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     }
   };
 
+  const getScrollPosition = (): Promise<number> => {
+    return new Promise((resolve) => {
+      // Check if WebView is ready before attempting to get position
+      if (!webViewReady || !webViewRef.current) {
+        resolve(0);
+        return;
+      }
+
+      const webView = webViewRef.current as any;
+      if (webView && typeof webView.injectJavaScript === 'function') {
+        scrollPositionResolverRef.current = resolve;
+
+        webView.injectJavaScript(`
+          (function() {
+            var pos = window.pageYOffset || document.documentElement.scrollTop;
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'scrollPosition',
+              position: pos
+            }));
+          })();
+        `);
+
+        // Timeout fallback
+        setTimeout(() => {
+          if (scrollPositionResolverRef.current === resolve) {
+            scrollPositionResolverRef.current = null;
+            resolve(0);
+          }
+        }, 2000);
+      } else {
+        resolve(0);
+      }
+    });
+  };
+
+  const scrollToPosition = (position: number) => {
+    // Check if WebView is ready before attempting to scroll
+    if (!webViewReady || !webViewRef.current) {
+      return;
+    }
+
+    const webView = webViewRef.current as any;
+    if (webView && typeof webView.injectJavaScript === 'function') {
+      const script = `
+        (function() {
+          // Try multiple methods to ensure scroll works
+          window.scrollTo(0, ${position});
+          document.documentElement.scrollTop = ${position};
+          document.body.scrollTop = ${position};
+        })();
+      `;
+      webView.injectJavaScript(script);
+    }
+  };
+
   // Expose methods via ref
   useImperativeHandle(ref, () => ({
     closeImageModal,
     scrollPage,
+    getScrollPosition,
+    scrollToPosition,
   }));
 
   return (

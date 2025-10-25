@@ -15,6 +15,7 @@ import {useSettings} from '../contexts/SettingsContext';
 import {Document} from '../types';
 import {readMarkdownFile} from '../utils/documentService';
 import {WebViewMarkdownReader, WebViewMarkdownReaderRef} from './WebViewMarkdownReader';
+import {saveReadingPosition, getReadingPosition} from '../utils/readingPositionService';
 
 interface MarkdownReaderProps {
   document: Document;
@@ -89,12 +90,15 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const [baseUrl, setBaseUrl] = useState('');
   const [isImageExpanded, setIsImageExpanded] = useState(false);
   const webViewRef = useRef<WebViewMarkdownReaderRef>(null);
+  const [webViewLoaded, setWebViewLoaded] = useState(false);
+  const scrollPositionToRestore = useRef<number | null>(null);
+  const hasRestoredPosition = useRef<boolean>(false);
 
   const scrollPage = (direction: 'up' | 'down') => {
     webViewRef.current?.scrollPage(direction);
   };
 
-  const handleBack = () => {
+  const handleBack = async () => {
     // If image is expanded, close it instead of going back
     if (isImageExpanded && webViewRef.current?.closeImageModal()) {
       return;
@@ -111,7 +115,18 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
         },
         {
           text: 'Close',
-          onPress: onBack,
+          onPress: async () => {
+            // Save scroll position only when user confirms close
+            try {
+              const scrollPosition = await webViewRef.current?.getScrollPosition();
+              if (scrollPosition !== undefined && scrollPosition >= 0) {
+                await saveReadingPosition(document.id, scrollPosition);
+              }
+            } catch (error) {
+              console.error('Failed to save reading position:', error);
+            }
+            onBack();
+          },
           style: 'destructive',
         },
       ],
@@ -129,21 +144,80 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     return () => backHandler.remove();
   }, [isImageExpanded, onBack]);
 
+  // Periodic auto-save of scroll position
+  useEffect(() => {
+    if (!isReady || !webViewLoaded) return;
+
+    const saveInterval = setInterval(async () => {
+      try {
+        const scrollPosition = await webViewRef.current?.getScrollPosition();
+        if (scrollPosition !== undefined) {
+          await saveReadingPosition(document.id, scrollPosition);
+        }
+      } catch (error) {
+        console.error('Failed to auto-save reading position:', error);
+      }
+    }, 3000); // Auto-save every 3 seconds
+
+    return () => clearInterval(saveInterval);
+  }, [document.id, isReady, webViewLoaded]);
+
   useEffect(() => {
     loadDocument();
+
+    // Save position on unmount - store current ref in variable to avoid stale closure
+    const currentWebViewRef = webViewRef;
+    const currentDocumentId = document.id;
+
+    return () => {
+      // Synchronously get and save position on unmount
+      (async () => {
+        try {
+          const scrollPosition = await currentWebViewRef.current?.getScrollPosition();
+          if (scrollPosition !== undefined && scrollPosition > 0) {
+            await saveReadingPosition(currentDocumentId, scrollPosition);
+          }
+        } catch (error) {
+          console.error('Failed to save reading position on unmount:', error);
+        }
+      })();
+    };
   }, [document.id]);
 
   const loadDocument = async () => {
     setIsReady(false);
+    setWebViewLoaded(false);
+    hasRestoredPosition.current = false; // Reset restoration flag
     try {
       const md = await readMarkdownFile(document.markdownFile);
       setContent(md);
       setBaseUrl(document.folderPath);
       setIsReady(true);
+
+      // Load saved position to restore later when WebView is ready
+      const savedPosition = await getReadingPosition(document.id);
+      scrollPositionToRestore.current = savedPosition?.scrollOffset ?? null;
     } catch (error) {
       console.error('Error loading document:', error);
       setContent('Error loading document');
       setIsReady(true);
+    }
+  };
+
+  const handleWebViewLoaded = () => {
+    setWebViewLoaded(true);
+
+    // Restore scroll position now that WebView is fully loaded
+    // Only restore once per document load, and only if position > 0
+    if (!hasRestoredPosition.current && scrollPositionToRestore.current !== null && scrollPositionToRestore.current > 0) {
+      hasRestoredPosition.current = true; // Mark as restored immediately to prevent multiple attempts
+      // Small delay to ensure DOM is fully rendered
+      setTimeout(() => {
+        const posToRestore = scrollPositionToRestore.current;
+        if (posToRestore !== null && posToRestore > 0) {
+          webViewRef.current?.scrollToPosition(posToRestore);
+        }
+      }, 800); // Longer delay to ensure WebView is fully ready
     }
   };
 
@@ -254,6 +328,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
               baseUrl={baseUrl}
               onTextSelected={handleTextSelected}
               onImageModalStateChange={handleImageModalStateChange}
+              onWebViewLoaded={handleWebViewLoaded}
             />
 
             <TouchableOpacity
