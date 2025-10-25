@@ -103,6 +103,11 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   });
   const [fontSizeModalVisible, setFontSizeModalVisible] = useState(false);
   const [fileMap, setFileMap] = useState<Map<string, string>>(new Map());
+  const [sentencePicker, setSentencePicker] = useState<{
+    visible: boolean;
+    sentences: string[];
+    fullText: string;
+  }>({visible: false, sentences: [], fullText: ''});
 
   const scrollViewRef = useRef<ScrollView>(null);
   const lastScrollOffset = useRef(0);
@@ -252,6 +257,64 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   // Pinch gesture removed to fix native crash with ScrollView
   // TODO: Implement font size controls via buttons instead
 
+  const handleParagraphTranslation = async (text: string) => {
+    try {
+      setTranslationModal({
+        visible: true,
+        word: '',
+        translation: '',
+        explanation: '',
+        loading: true,
+      });
+
+      const targetLanguage = settings.targetLanguage || 'Spanish';
+      const prompt = `Translate the following text to ${targetLanguage}. If the text is already in ${targetLanguage}, rewrite it in a simpler and more understandable way:\n\n${text}`;
+
+      const response = await fetch(settings.llmApiUrl || '', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${settings.llmApiKey}`,
+        },
+        body: JSON.stringify({
+          model: settings.llmModel || 'gpt-3.5-turbo',
+          messages: [
+            {
+              role: 'system',
+              content: `You are a helpful translation and simplification assistant. When translating, provide ONLY the translated text without any labels, prefixes, or explanations like "Translation:" or "Traducción:". When the text is already in the target language, rewrite it in simpler, clearer language while preserving the meaning. Return ONLY the final text, nothing else.`,
+            },
+            {
+              role: 'user',
+              content: prompt,
+            },
+          ],
+          temperature: 0.3,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const result = data.choices?.[0]?.message?.content || 'No translation available';
+
+      setTranslationModal(prev => ({
+        ...prev,
+        translation: result,
+        loading: false,
+      }));
+    } catch (error) {
+      console.error('Translation error:', error);
+      setTranslationModal(prev => ({
+        ...prev,
+        translation: 'Error',
+        explanation: 'Failed to translate. Please configure API settings.',
+        loading: false,
+      }));
+    }
+  };
+
   const handleLongPress = async (word: string, context?: string) => {
     try {
       console.log('Settings in MarkdownReader:', {
@@ -360,33 +423,23 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
 
     // Shared long-press handler creator
     const createLongPressHandler = (fullText: string) => (event: any) => {
-      const {locationX} = event.nativeEvent;
+      // Split text into sentences
+      const sentences = fullText
+        .split(/([.!?]+)(?:\s+|$)/)
+        .reduce((acc: string[], curr, i, arr) => {
+          if (i % 2 === 0 && curr.trim()) {
+            const punctuation = arr[i + 1] || '';
+            acc.push((curr + punctuation).trim());
+          }
+          return acc;
+        }, [])
+        .filter(s => s.length > 0);
 
-      // Split text into words with their positions
-      const words = fullText.split(/(\s+)/).filter(w => w.trim().length > 0);
-
-      // Estimate character width based on font size
-      const charWidth = fontSize * 0.5; // Approximate character width
-      const charIndex = Math.floor(locationX / charWidth);
-
-      // Find word at character index
-      let currentIndex = 0;
-      let selectedWord = words[0] || '';
-
-      for (const word of words) {
-        if (charIndex >= currentIndex && charIndex < currentIndex + word.length) {
-          selectedWord = word;
-          break;
-        }
-        currentIndex += word.length + 1; // +1 for space
-      }
-
-      // Clean the selected word
-      const cleanWord = selectedWord.replace(/[.,;:!?()[\]{}'"]/g, '');
-
-      if (cleanWord) {
-        handleLongPress(cleanWord, fullText);
-      }
+      setSentencePicker({
+        visible: true,
+        sentences,
+        fullText,
+      });
     };
 
     return {
@@ -639,46 +692,84 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
         )}
 
         <Modal
-          visible={translationModal.visible}
+          visible={sentencePicker.visible}
           transparent
-          animationType="fade"
+          animationType="slide"
           onRequestClose={() =>
-            setTranslationModal(prev => ({...prev, visible: false}))
+            setSentencePicker({visible: false, sentences: [], fullText: ''})
           }>
           <TouchableOpacity
             style={styles.modalOverlay}
             activeOpacity={1}
             onPress={() =>
+              setSentencePicker({visible: false, sentences: [], fullText: ''})
+            }>
+            <TouchableOpacity activeOpacity={1}>
+              <View
+                style={[
+                  styles.sentencePickerModal,
+                  {backgroundColor: theme.background, borderColor: theme.border},
+                ]}>
+                <Text style={[styles.sentencePickerTitle, {color: theme.text}]}>
+                  Select sentence to translate
+                </Text>
+                <ScrollView style={styles.sentenceList}>
+                  {sentencePicker.sentences.map((sentence, index) => (
+                    <TouchableOpacity
+                      key={index}
+                      style={[
+                        styles.sentenceItem,
+                        {borderBottomColor: theme.border},
+                      ]}
+                      onPress={() => {
+                        setSentencePicker({
+                          visible: false,
+                          sentences: [],
+                          fullText: '',
+                        });
+                        handleParagraphTranslation(sentence);
+                      }}>
+                      <Text style={[styles.sentenceText, {color: theme.text}]}>
+                        {sentence}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
+
+        <Modal
+          visible={translationModal.visible}
+          transparent
+          animationType="slide"
+          onRequestClose={() =>
+            setTranslationModal(prev => ({...prev, visible: false}))
+          }>
+          <TouchableOpacity
+            style={styles.translationOverlay}
+            activeOpacity={1}
+            onPress={() =>
               setTranslationModal(prev => ({...prev, visible: false}))
             }>
-            <View
-              style={[
-                styles.translationModal,
-                {backgroundColor: theme.background, borderColor: theme.border},
-              ]}>
-              <Text style={[styles.modalWord, {color: theme.accent}]}>
-                {translationModal.word}
-              </Text>
-              {translationModal.loading ? (
-                <ActivityIndicator color={theme.accent} />
-              ) : (
-                <>
-                  <Text style={[styles.modalLabel, {color: theme.text}]}>
-                    Translation:
-                  </Text>
-                  <Text style={[styles.modalText, {color: theme.text}]}>
-                    {translationModal.translation}
-                  </Text>
-                  <Text
-                    style={[styles.modalLabel, {color: theme.text, marginTop: 10}]}>
-                    Explanation:
-                  </Text>
-                  <Text style={[styles.modalText, {color: theme.text}]}>
-                    {translationModal.explanation}
-                  </Text>
-                </>
-              )}
-            </View>
+            <TouchableOpacity activeOpacity={1}>
+              <SafeAreaView edges={['bottom']}>
+                <View
+                  style={[
+                    styles.translationFloating,
+                    {backgroundColor: theme.background, borderColor: theme.border},
+                  ]}>
+                  {translationModal.loading ? (
+                    <ActivityIndicator color={theme.accent} />
+                  ) : (
+                    <Text style={[styles.translationText, {color: theme.text}]}>
+                      {translationModal.translation}
+                    </Text>
+                  )}
+                </View>
+              </SafeAreaView>
+            </TouchableOpacity>
           </TouchableOpacity>
         </Modal>
 
@@ -782,24 +873,45 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  translationModal: {
-    width: '80%',
+  translationOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  translationFloating: {
+    padding: 20,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    borderTopWidth: 1,
+    minHeight: 80,
+  },
+  translationText: {
+    fontSize: 16,
+    lineHeight: 24,
+  },
+  sentencePickerModal: {
+    width: '90%',
+    maxHeight: '70%',
     padding: 20,
     borderRadius: 12,
     borderWidth: 1,
   },
-  modalWord: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 16,
-  },
-  modalLabel: {
-    fontSize: 14,
+  sentencePickerTitle: {
+    fontSize: 18,
     fontWeight: '600',
-    marginBottom: 4,
+    marginBottom: 16,
+    textAlign: 'center',
   },
-  modalText: {
+  sentenceList: {
+    maxHeight: 400,
+  },
+  sentenceItem: {
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+  },
+  sentenceText: {
     fontSize: 16,
+    lineHeight: 24,
   },
   chunkNavContainer: {
     borderTopWidth: 1,
