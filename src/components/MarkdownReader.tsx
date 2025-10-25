@@ -1,31 +1,18 @@
-import React, {useEffect, useState, useRef, useMemo, useCallback} from 'react';
+import React, {useEffect, useState, useRef, useCallback} from 'react';
 import {
   View,
-  ScrollView,
   StyleSheet,
   TouchableOpacity,
-  Dimensions,
   Modal,
   Text,
   ActivityIndicator,
-  Image,
-  Pressable,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
-// Gesture handler removed - was causing native crashes with ScrollView
-import Markdown from 'react-native-markdown-display';
 import {useTheme} from '../contexts/ThemeContext';
 import {useSettings} from '../contexts/SettingsContext';
 import {Document} from '../types';
 import {readMarkdownFile} from '../utils/documentService';
-import {
-  saveReadingPosition,
-  getReadingPosition,
-} from '../utils/readingPositionService';
-import {translateWord} from '../utils/llmService';
-import {ImageZoom} from './ImageZoom';
-import {splitMarkdownIntoChunks, MarkdownChunk} from '../utils/markdownPagination';
-import {File, Directory} from 'expo-file-system';
+import {WebViewMarkdownReader} from './WebViewMarkdownReader';
 
 interface MarkdownReaderProps {
   document: Document;
@@ -89,181 +76,41 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const {theme, isDarkMode, toggleTheme} = useTheme();
   const {settings, updateSettings} = useSettings();
   const [content, setContent] = useState('');
-  const [chunks, setChunks] = useState<MarkdownChunk[]>([]);
-  const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
-  const [renderedChunks, setRenderedChunks] = useState<string>(''); // Combined prev + current + next
   const [fontSize, setFontSize] = useState(settings.fontSize);
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [translationModal, setTranslationModal] = useState({
     visible: false,
-    word: '',
     translation: '',
-    explanation: '',
     loading: false,
   });
   const [fontSizeModalVisible, setFontSizeModalVisible] = useState(false);
-  const [fileMap, setFileMap] = useState<Map<string, string>>(new Map());
-  const [sentencePicker, setSentencePicker] = useState<{
-    visible: boolean;
-    sentences: string[];
-    fullText: string;
-  }>({visible: false, sentences: [], fullText: ''});
-
-  const scrollViewRef = useRef<ScrollView>(null);
-  const lastScrollOffset = useRef(0);
   const [isReady, setIsReady] = useState(false);
-  const hasRestoredPosition = useRef(false);
-  const isUserInteracting = useRef(false);
+  const webViewRef = useRef<any>(null);
 
   useEffect(() => {
     loadDocument();
   }, [document.id]);
 
-  useEffect(() => {
-    return () => {
-      saveReadingPosition(document.id, lastScrollOffset.current, currentChunkIndex);
-    };
-  }, [document.id, currentChunkIndex]);
-
   const loadDocument = async () => {
     setIsReady(false);
-    hasRestoredPosition.current = false;
-    isUserInteracting.current = false;
     try {
-      // Build file map for fast image lookups
-      const map = new Map<string, string>();
-      try {
-        const dir = new Directory(document.folderPath);
-        const items = dir.list();
-        for (const item of items) {
-          if (item instanceof File) {
-            map.set(item.name, item.uri);
-          }
-        }
-      } catch (error) {
-        // Folder can't be listed (e.g., when opening a single file)
-        // Images won't work but document can still be read
-        console.log('Could not list folder contents:', error);
-      }
-      setFileMap(map);
-
-      // Parallelize file read and position read
-      const [md, position] = await Promise.all([
-        readMarkdownFile(document.markdownFile),
-        getReadingPosition(document.id),
-      ]);
-
-      // Split content into chunks for better performance
-      const markdownChunks = splitMarkdownIntoChunks(md);
-
-      // Determine which chunk to start on based on saved position
-      let initialChunkIndex = 0;
-      if (position?.chunkIndex !== undefined) {
-        initialChunkIndex = Math.min(position.chunkIndex, markdownChunks.length - 1);
-      }
-
-      // Set all state at once
+      const md = await readMarkdownFile(document.markdownFile);
       setContent(md);
-      setChunks(markdownChunks);
-      setCurrentChunkIndex(initialChunkIndex);
-      lastScrollOffset.current = position?.scrollOffset || 0;
       setIsReady(true);
     } catch (error) {
       console.error('Error loading document:', error);
       setContent('Error loading document');
-      setChunks([{content: 'Error loading document', startLine: 0, endLine: 0}]);
-      setCurrentChunkIndex(0);
-      lastScrollOffset.current = 0;
       setIsReady(true);
     }
   };
 
-  // Update rendered content when chunk changes
-  useEffect(() => {
-    if (chunks.length === 0) return;
-    setRenderedChunks(chunks[currentChunkIndex]?.content || '');
-  }, [currentChunkIndex, chunks]);
-
-  const handleScroll = (event: any) => {
-    const {contentOffset} = event.nativeEvent;
-    lastScrollOffset.current = contentOffset.y;
-    isUserInteracting.current = true;
-  };
-
-  const goToNextChunk = () => {
-    if (currentChunkIndex < chunks.length - 1) {
-      setCurrentChunkIndex(prev => prev + 1);
-      // Go to top of next chunk
-      setTimeout(() => scrollViewRef.current?.scrollTo({y: 0, animated: false}), 100);
-    }
-  };
-
-  const goToPrevChunk = () => {
-    if (currentChunkIndex > 0) {
-      setCurrentChunkIndex(prev => prev - 1);
-      // Go to bottom of previous chunk
-      setTimeout(() => scrollViewRef.current?.scrollToEnd({animated: false}), 100);
-    }
-  };
-
-  const handlePageTap = (side: 'left' | 'right') => {
-    if (!isReady) return;
-
-    isUserInteracting.current = true;
-    hasRestoredPosition.current = true;
-
-    const screenHeight = Dimensions.get('window').height - 100;
-
-    if (side === 'left') {
-      // Scroll up or go to previous chunk if at top
-      if (lastScrollOffset.current > 100) {
-        scrollViewRef.current?.scrollTo({
-          y: Math.max(0, lastScrollOffset.current - screenHeight),
-          animated: true,
-        });
-      } else if (currentChunkIndex > 0) {
-        goToPrevChunk();
-      }
-    } else {
-      // Scroll down or go to next chunk if near bottom
-      scrollViewRef.current?.scrollTo({
-        y: lastScrollOffset.current + screenHeight,
-        animated: true,
-      });
-    }
-  };
-
-  const handleContentSizeChange = useCallback(() => {
-    // Only restore position once, and only if user hasn't interacted yet
-    if (!hasRestoredPosition.current &&
-        !isUserInteracting.current &&
-        lastScrollOffset.current > 0 &&
-        scrollViewRef.current) {
-      hasRestoredPosition.current = true;
-      setTimeout(() => {
-        scrollViewRef.current?.scrollTo({
-          y: lastScrollOffset.current,
-          animated: false,
-        });
-      }, 50);
-    }
-  }, []);
-
-  const handleScrollBeginDrag = useCallback(() => {
-    isUserInteracting.current = true;
-    hasRestoredPosition.current = true;
-  }, []);
-
-  // Pinch gesture removed to fix native crash with ScrollView
-  // TODO: Implement font size controls via buttons instead
-
-  const handleParagraphTranslation = async (text: string) => {
+  const handleTextSelected = async (text: string) => {
     try {
+      // Highlight the selected text in WebView
+      webViewRef.current?.highlightText(text);
+
       setTranslationModal({
         visible: true,
-        word: '',
         translation: '',
-        explanation: '',
         loading: true,
       });
 
@@ -306,286 +153,13 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
       }));
     } catch (error) {
       console.error('Translation error:', error);
-      setTranslationModal(prev => ({
-        ...prev,
-        translation: 'Error',
-        explanation: 'Failed to translate. Please configure API settings.',
-        loading: false,
-      }));
-    }
-  };
-
-  const handleLongPress = async (word: string, context?: string) => {
-    try {
-      console.log('Settings in MarkdownReader:', {
-        hasUrl: !!settings.llmApiUrl,
-        hasKey: !!settings.llmApiKey,
-        urlLength: settings.llmApiUrl?.length,
-        keyLength: settings.llmApiKey?.length,
-        url: settings.llmApiUrl,
-        key: settings.llmApiKey,
-      });
-
       setTranslationModal({
         visible: true,
-        word,
-        translation: '',
-        explanation: '',
-        loading: true,
+        translation: 'Failed to translate. Please configure API settings.',
+        loading: false,
       });
-
-      const result = await translateWord(
-        word,
-        settings.llmApiUrl || '',
-        settings.llmApiKey || '',
-        settings.llmModel || '',
-        settings.targetLanguage || 'Spanish',
-        context,
-      );
-
-      setTranslationModal(prev => ({
-        ...prev,
-        translation: result.translation,
-        explanation: result.explanation,
-        loading: false,
-      }));
-    } catch (error) {
-      console.error('Long press handler error:', error);
-      setTranslationModal(prev => ({
-        ...prev,
-        translation: 'Error',
-        explanation: 'Failed to translate. Please configure API settings.',
-        loading: false,
-      }));
     }
   };
-
-  const markdownStyles = useMemo(() => ({
-    body: {
-      color: theme.text,
-      fontSize: fontSize,
-      lineHeight: fontSize * 1.6,
-    },
-    heading1: {
-      color: theme.text,
-      fontSize: fontSize * 1.8,
-      marginTop: 20,
-      marginBottom: 10,
-    },
-    heading2: {
-      color: theme.text,
-      fontSize: fontSize * 1.5,
-      marginTop: 16,
-      marginBottom: 8,
-    },
-    heading3: {
-      color: theme.text,
-      fontSize: fontSize * 1.3,
-      marginTop: 12,
-      marginBottom: 6,
-    },
-    paragraph: {
-      color: theme.text,
-      marginBottom: 12,
-    },
-    image: {
-      maxWidth: 200,
-      maxHeight: 150,
-      resizeMode: 'contain',
-      marginVertical: 10,
-    },
-    code_inline: {
-      backgroundColor: theme.border,
-      color: theme.accent,
-      padding: 4,
-      borderRadius: 4,
-    },
-    code_block: {
-      backgroundColor: theme.border,
-      color: theme.text,
-      padding: 10,
-      borderRadius: 8,
-      marginVertical: 10,
-    },
-    link: {
-      color: theme.accent,
-    },
-  }), [theme.text, theme.border, theme.accent, fontSize]);
-
-  const markdownRules = useMemo(() => {
-    // Shared function to extract text from children recursively
-    const extractText = (child: any): string => {
-      if (typeof child === 'string') return child;
-      if (Array.isArray(child)) return child.map(extractText).join('');
-      if (child?.props?.children) return extractText(child.props.children);
-      return '';
-    };
-
-    // Shared long-press handler creator
-    const createLongPressHandler = (fullText: string) => (event: any) => {
-      // Split text into sentences
-      const sentences = fullText
-        .split(/([.!?]+)(?:\s+|$)/)
-        .reduce((acc: string[], curr, i, arr) => {
-          if (i % 2 === 0 && curr.trim()) {
-            const punctuation = arr[i + 1] || '';
-            acc.push((curr + punctuation).trim());
-          }
-          return acc;
-        }, [])
-        .filter(s => s.length > 0);
-
-      setSentencePicker({
-        visible: true,
-        sentences,
-        fullText,
-      });
-    };
-
-    return {
-      image: (node: any) => {
-        const src = node.attributes?.src || '';
-
-        return (
-          <ImageRenderer
-            key={String(node.key)}
-            src={src}
-            fileMap={fileMap}
-            style={markdownStyles.image}
-            onPress={setSelectedImage}
-          />
-        );
-      },
-      paragraph: (node: any, children: any) => {
-        const fullText = extractText(children).trim();
-
-        return (
-          <Text
-            key={String(node.key)}
-            style={markdownStyles.paragraph}
-            onLongPress={createLongPressHandler(fullText)}>
-            {children}
-          </Text>
-        );
-      },
-      heading1: (node: any, children: any) => {
-        const fullText = extractText(children).trim();
-
-        return (
-          <Text
-            key={String(node.key)}
-            style={markdownStyles.heading1}
-            onLongPress={createLongPressHandler(fullText)}>
-            {children}
-          </Text>
-        );
-      },
-      heading2: (node: any, children: any) => {
-        const fullText = extractText(children).trim();
-
-        return (
-          <Text
-            key={String(node.key)}
-            style={markdownStyles.heading2}
-            onLongPress={createLongPressHandler(fullText)}>
-            {children}
-          </Text>
-        );
-      },
-      heading3: (node: any, children: any) => {
-        const fullText = extractText(children).trim();
-
-        return (
-          <Text
-            key={String(node.key)}
-            style={markdownStyles.heading3}
-            onLongPress={createLongPressHandler(fullText)}>
-            {children}
-          </Text>
-        );
-      },
-      heading4: (node: any, children: any) => {
-        const fullText = extractText(children).trim();
-
-        return (
-          <Text
-            key={String(node.key)}
-            style={[markdownStyles.heading3, {fontSize: fontSize * 1.2}]}
-            onLongPress={createLongPressHandler(fullText)}>
-            {children}
-          </Text>
-        );
-      },
-      heading5: (node: any, children: any) => {
-        const fullText = extractText(children).trim();
-
-        return (
-          <Text
-            key={String(node.key)}
-            style={[markdownStyles.heading3, {fontSize: fontSize * 1.1}]}
-            onLongPress={createLongPressHandler(fullText)}>
-            {children}
-          </Text>
-        );
-      },
-      heading6: (node: any, children: any) => {
-        const fullText = extractText(children).trim();
-
-        return (
-          <Text
-            key={String(node.key)}
-            style={markdownStyles.heading3}
-            onLongPress={createLongPressHandler(fullText)}>
-            {children}
-          </Text>
-        );
-      },
-      strong: (node: any, children: any) => {
-        const fullText = extractText(children).trim();
-
-        return (
-          <Text
-            key={String(node.key)}
-            style={{fontWeight: 'bold'}}
-            onLongPress={createLongPressHandler(fullText)}>
-            {children}
-          </Text>
-        );
-      },
-      em: (node: any, children: any) => {
-        const fullText = extractText(children).trim();
-
-        return (
-          <Text
-            key={String(node.key)}
-            style={{fontStyle: 'italic'}}
-            onLongPress={createLongPressHandler(fullText)}>
-            {children}
-          </Text>
-        );
-      },
-      textgroup: (node: any, children: any, parent: any) => {
-        const fullText = extractText(children).trim();
-
-        // Only add onLongPress if parent doesn't already have it
-        // (to avoid conflicts with heading/paragraph handlers)
-        const parentType = parent?.[0]?.type;
-        const skipLongPress = ['heading1', 'heading2', 'heading3', 'heading4', 'heading5', 'heading6', 'paragraph'].includes(parentType);
-
-        if (skipLongPress) {
-          return <Text key={String(node.key)}>{children}</Text>;
-        }
-
-        return (
-          <Text
-            key={String(node.key)}
-            onLongPress={createLongPressHandler(fullText)}>
-            {children}
-          </Text>
-        );
-      },
-    };
-  }, [markdownStyles.image, markdownStyles.paragraph, markdownStyles.heading1, markdownStyles.heading2, markdownStyles.heading3, fileMap, fontSize, theme.text]);
 
   return (
     <View style={[styles.container, {backgroundColor: theme.background}]}>
@@ -620,125 +194,13 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
             </Text>
           </View>
         ) : (
-          <View style={styles.contentContainer}>
-            <TouchableOpacity
-              style={styles.tapArea}
-              activeOpacity={1}
-              onPress={() => handlePageTap('left')}>
-              <View style={styles.tapZoneLeft} />
-            </TouchableOpacity>
-
-            <View style={{flex: 1}}>
-              <ScrollView
-                ref={scrollViewRef}
-                style={styles.scrollView}
-                onScroll={handleScroll}
-                onScrollBeginDrag={handleScrollBeginDrag}
-                scrollEventThrottle={16}
-                onContentSizeChange={handleContentSizeChange}>
-                {renderedChunks ? (
-                  <Markdown
-                    style={markdownStyles}
-                    rules={markdownRules}>
-                    {renderedChunks}
-                  </Markdown>
-                ) : (
-                  <Text style={{color: theme.text, padding: 16}}>No content</Text>
-                )}
-              </ScrollView>
-
-              {chunks.length > 1 && (
-                <SafeAreaView edges={['bottom']} style={[styles.chunkNavContainer, {backgroundColor: theme.background}]}>
-                  <View style={[styles.chunkNav, {borderTopColor: theme.border}]}>
-                    <TouchableOpacity
-                      onPress={goToPrevChunk}
-                      disabled={currentChunkIndex === 0}
-                      style={[styles.chunkButton, currentChunkIndex === 0 && styles.chunkButtonDisabled]}>
-                      <Text style={[styles.chunkButtonText, {color: currentChunkIndex === 0 ? theme.border : theme.accent}]}>
-                        ← Prev
-                      </Text>
-                    </TouchableOpacity>
-                    <Text style={[styles.chunkText, {color: theme.text}]}>
-                      {currentChunkIndex + 1} / {chunks.length}
-                    </Text>
-                    <TouchableOpacity
-                      onPress={goToNextChunk}
-                      disabled={currentChunkIndex === chunks.length - 1}
-                      style={[styles.chunkButton, currentChunkIndex === chunks.length - 1 && styles.chunkButtonDisabled]}>
-                      <Text style={[styles.chunkButtonText, {color: currentChunkIndex === chunks.length - 1 ? theme.border : theme.accent}]}>
-                        Next →
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                </SafeAreaView>
-              )}
-            </View>
-
-            <TouchableOpacity
-              style={styles.tapArea}
-              activeOpacity={1}
-              onPress={() => handlePageTap('right')}>
-              <View style={styles.tapZoneRight} />
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {selectedImage && (
-          <ImageZoom
-            imageUrl={selectedImage}
-            visible={!!selectedImage}
-            onClose={() => setSelectedImage(null)}
+          <WebViewMarkdownReader
+            ref={webViewRef}
+            markdown={content}
+            fontSize={fontSize}
+            onTextSelected={handleTextSelected}
           />
         )}
-
-        <Modal
-          visible={sentencePicker.visible}
-          transparent
-          animationType="slide"
-          onRequestClose={() =>
-            setSentencePicker({visible: false, sentences: [], fullText: ''})
-          }>
-          <TouchableOpacity
-            style={styles.modalOverlay}
-            activeOpacity={1}
-            onPress={() =>
-              setSentencePicker({visible: false, sentences: [], fullText: ''})
-            }>
-            <TouchableOpacity activeOpacity={1}>
-              <View
-                style={[
-                  styles.sentencePickerModal,
-                  {backgroundColor: theme.background, borderColor: theme.border},
-                ]}>
-                <Text style={[styles.sentencePickerTitle, {color: theme.text}]}>
-                  Select sentence to translate
-                </Text>
-                <ScrollView style={styles.sentenceList}>
-                  {sentencePicker.sentences.map((sentence, index) => (
-                    <TouchableOpacity
-                      key={index}
-                      style={[
-                        styles.sentenceItem,
-                        {borderBottomColor: theme.border},
-                      ]}
-                      onPress={() => {
-                        setSentencePicker({
-                          visible: false,
-                          sentences: [],
-                          fullText: '',
-                        });
-                        handleParagraphTranslation(sentence);
-                      }}>
-                      <Text style={[styles.sentenceText, {color: theme.text}]}>
-                        {sentence}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </Modal>
 
         <Modal
           visible={translationModal.visible}
@@ -750,9 +212,10 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
           <TouchableOpacity
             style={styles.translationOverlay}
             activeOpacity={1}
-            onPress={() =>
-              setTranslationModal(prev => ({...prev, visible: false}))
-            }>
+            onPress={() => {
+              setTranslationModal(prev => ({...prev, visible: false}));
+              webViewRef.current?.highlightText(''); // Clear highlight
+            }}>
             <TouchableOpacity activeOpacity={1}>
               <SafeAreaView edges={['bottom']}>
                 <View
@@ -849,24 +312,6 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 16,
   },
-  contentContainer: {
-    flex: 1,
-    flexDirection: 'row',
-  },
-  tapArea: {
-    width: 40,
-    justifyContent: 'center',
-  },
-  tapZoneLeft: {
-    flex: 1,
-  },
-  tapZoneRight: {
-    flex: 1,
-  },
-  scrollView: {
-    flex: 1,
-    paddingHorizontal: 5,
-  },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
@@ -887,56 +332,6 @@ const styles = StyleSheet.create({
   translationText: {
     fontSize: 16,
     lineHeight: 24,
-  },
-  sentencePickerModal: {
-    width: '90%',
-    maxHeight: '70%',
-    padding: 20,
-    borderRadius: 12,
-    borderWidth: 1,
-  },
-  sentencePickerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 16,
-    textAlign: 'center',
-  },
-  sentenceList: {
-    maxHeight: 400,
-  },
-  sentenceItem: {
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderBottomWidth: 1,
-  },
-  sentenceText: {
-    fontSize: 16,
-    lineHeight: 24,
-  },
-  chunkNavContainer: {
-    borderTopWidth: 1,
-  },
-  chunkNav: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 4,
-    paddingBottom: 2,
-    paddingHorizontal: 16,
-  },
-  chunkButton: {
-    padding: 10,
-  },
-  chunkButtonDisabled: {
-    opacity: 0.3,
-  },
-  chunkButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  chunkText: {
-    fontSize: 12,
-    opacity: 0.6,
   },
   themeButton: {
     padding: 8,
