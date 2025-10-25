@@ -30,11 +30,12 @@ export default function App() {
   // Handle Android back button
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (currentScreen === 'reader' || currentScreen === 'settings') {
+      if (currentScreen === 'settings') {
         handleBackToList();
         return true; // Prevent default behavior (exit app)
       }
-      return false; // Allow default behavior (exit app) on list screen
+      // Note: 'reader' screen handles its own back button in MarkdownReader component
+      return false; // Allow default behavior (exit app) on list screen or let reader handle it
     });
 
     return () => backHandler.remove();

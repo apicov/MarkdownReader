@@ -6,13 +6,15 @@ import {
   Modal,
   Text,
   ActivityIndicator,
+  BackHandler,
+  Alert,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../contexts/ThemeContext';
 import {useSettings} from '../contexts/SettingsContext';
 import {Document} from '../types';
 import {readMarkdownFile} from '../utils/documentService';
-import {WebViewMarkdownReader} from './WebViewMarkdownReader';
+import {WebViewMarkdownReader, WebViewMarkdownReaderRef} from './WebViewMarkdownReader';
 
 interface MarkdownReaderProps {
   document: Document;
@@ -85,15 +87,47 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const [fontSizeModalVisible, setFontSizeModalVisible] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [baseUrl, setBaseUrl] = useState('');
-  const webViewRef = useRef<any>(null);
+  const [isImageExpanded, setIsImageExpanded] = useState(false);
+  const webViewRef = useRef<WebViewMarkdownReaderRef>(null);
 
   const scrollPage = (direction: 'up' | 'down') => {
-    const scrollAmount = 500; // Pixels to scroll
-    const script = direction === 'up'
-      ? `window.scrollBy(0, -${scrollAmount});`
-      : `window.scrollBy(0, ${scrollAmount});`;
-    webViewRef.current?.injectJavaScript(script);
+    // Scrolling is handled by tap zones, not needed with new ref structure
   };
+
+  const handleBack = () => {
+    // If image is expanded, close it instead of going back
+    if (isImageExpanded && webViewRef.current?.closeImageModal()) {
+      return;
+    }
+
+    // Show confirmation dialog before going back
+    Alert.alert(
+      'Close Document',
+      'Do you want to close this document?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Close',
+          onPress: onBack,
+          style: 'destructive',
+        },
+      ],
+      { cancelable: true }
+    );
+  };
+
+  // Handle Android back button
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleBack();
+      return true; // Prevent default behavior
+    });
+
+    return () => backHandler.remove();
+  }, [isImageExpanded, onBack]);
 
   useEffect(() => {
     loadDocument();
@@ -111,6 +145,10 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
       setContent('Error loading document');
       setIsReady(true);
     }
+  };
+
+  const handleImageModalStateChange = (isOpen: boolean) => {
+    setIsImageExpanded(isOpen);
   };
 
   const handleTextSelected = async (text: string) => {
@@ -174,7 +212,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   return (
     <View style={[styles.container, {backgroundColor: theme.background}]}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backButton}>
+        <TouchableOpacity onPress={handleBack} style={styles.backButton}>
           <Text style={[styles.backButtonText, {color: theme.accent}]}>
             ← Back
           </Text>
@@ -218,6 +256,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
               fontSize={fontSize}
               baseUrl={baseUrl}
               onTextSelected={handleTextSelected}
+              onImageModalStateChange={handleImageModalStateChange}
             />
 
             <TouchableOpacity

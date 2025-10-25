@@ -1,4 +1,4 @@
-import React, {useRef, useState, useEffect} from 'react';
+import React, {useRef, useState, useEffect, useImperativeHandle, forwardRef} from 'react';
 import {View, StyleSheet, ActivityIndicator} from 'react-native';
 import WebView from 'react-native-webview';
 import {useTheme} from '../contexts/ThemeContext';
@@ -9,20 +9,28 @@ interface WebViewMarkdownReaderProps {
   fontSize: number;
   baseUrl?: string;
   onTextSelected?: (text: string) => void;
+  onImageModalStateChange?: (isOpen: boolean) => void;
 }
 
-export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
+export interface WebViewMarkdownReaderRef {
+  highlightText: (text: string) => void;
+  closeImageModal: () => boolean;
+}
+
+export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebViewMarkdownReaderProps>(({
   markdown,
   fontSize,
   baseUrl = '',
   onTextSelected,
-}) => {
+  onImageModalStateChange,
+}, ref) => {
   const {theme} = useTheme();
   const webViewRef = useRef<WebView>(null);
   const [loading, setLoading] = useState(true);
   const [htmlUri, setHtmlUri] = useState<string | null>(null);
   const [webViewReady, setWebViewReady] = useState(false);
   const pendingImagesRef = useRef<Map<string, string> | null>(null);
+  const [isImageExpanded, setIsImageExpanded] = useState(false);
 
   // Create HTML file when markdown or theme changes
   useEffect(() => {
@@ -187,6 +195,11 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
           window.currentX = 0;
           window.currentY = 0;
           updateModalImageTransform();
+          // Notify React Native that image modal is open
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'imageModalStateChanged',
+            isOpen: true
+          }));
         });
       });
     }
@@ -203,6 +216,11 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
       if (e.target === modal) {
         modal.classList.remove('active');
         document.body.classList.remove('modal-open');
+        // Notify React Native that image modal is closed
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'imageModalStateChanged',
+          isOpen: false
+        }));
       }
     });
 
@@ -276,6 +294,20 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
       modalImage.style.transform = \`translate(\${window.currentX}px, \${window.currentY}px) scale(\${window.currentScale})\`;
     };
     const updateModalImageTransform = window.updateModalImageTransform;
+
+    // Function to close image modal (can be called from React Native)
+    window.closeImageModal = function() {
+      if (modal.classList.contains('active')) {
+        modal.classList.remove('active');
+        document.body.classList.remove('modal-open');
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'imageModalStateChanged',
+          isOpen: false
+        }));
+        return true;
+      }
+      return false;
+    };
 
     // Detect text selection
     let selectionTimeout;
@@ -397,6 +429,11 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
                     if (window.updateModalImageTransform) {
                       window.updateModalImageTransform();
                     }
+                    // Notify React Native that image modal is open
+                    window.ReactNativeWebView.postMessage(JSON.stringify({
+                      type: 'imageModalStateChanged',
+                      isOpen: true
+                    }));
                   });
                 }
               })();
@@ -434,10 +471,26 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
         }
       } else if (data.type === 'textSelected' && onTextSelected) {
         onTextSelected(data.text);
+      } else if (data.type === 'imageModalStateChanged') {
+        setIsImageExpanded(data.isOpen);
+        if (onImageModalStateChange) {
+          onImageModalStateChange(data.isOpen);
+        }
       }
     } catch (error) {
       console.error('Error parsing WebView message:', error);
     }
+  };
+
+  const closeImageModal = (): boolean => {
+    if (isImageExpanded && webViewRef.current) {
+      const webView = webViewRef.current as any;
+      if (webView && typeof webView.injectJavaScript === 'function') {
+        webView.injectJavaScript('window.closeImageModal();');
+        return true;
+      }
+    }
+    return false;
   };
 
   const highlightText = (text: string) => {
@@ -446,6 +499,12 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
       webView.injectJavaScript(`highlightText(${JSON.stringify(text)});`);
     }
   };
+
+  // Expose methods via ref
+  useImperativeHandle(ref, () => ({
+    highlightText,
+    closeImageModal,
+  }));
 
   return (
     <View style={styles.container}>
@@ -473,7 +532,7 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
       )}
     </View>
   );
-};
+});
 
 const styles = StyleSheet.create({
   container: {
