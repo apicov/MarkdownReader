@@ -239,7 +239,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
             </Text>
           </View>
         ) : (
-          <View style={styles.contentContainer}>
+          <SafeAreaView edges={['bottom']} style={styles.contentContainer}>
             <TouchableOpacity
               style={styles.tapArea}
               activeOpacity={1}
@@ -290,7 +290,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
                 </SafeAreaView>
               </View>
             )}
-          </View>
+          </SafeAreaView>
         )}
 
         <Modal
