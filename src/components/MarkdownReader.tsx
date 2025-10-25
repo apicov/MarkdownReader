@@ -91,7 +91,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const webViewRef = useRef<WebViewMarkdownReaderRef>(null);
 
   const scrollPage = (direction: 'up' | 'down') => {
-    // Scrolling is handled by tap zones, not needed with new ref structure
+    webViewRef.current?.scrollPage(direction);
   };
 
   const handleBack = () => {

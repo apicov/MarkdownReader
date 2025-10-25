@@ -14,6 +14,7 @@ interface WebViewMarkdownReaderProps {
 
 export interface WebViewMarkdownReaderRef {
   closeImageModal: () => boolean;
+  scrollPage: (direction: 'up' | 'down') => void;
 }
 
 export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebViewMarkdownReaderProps>(({
@@ -457,9 +458,26 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     return false;
   };
 
+  const scrollPage = (direction: 'up' | 'down') => {
+    if (webViewRef.current) {
+      const webView = webViewRef.current as any;
+      if (webView && typeof webView.injectJavaScript === 'function') {
+        const scrollAmount = direction === 'down' ? 'window.innerHeight' : '-window.innerHeight';
+        const script = `
+          window.scrollBy({
+            top: ${scrollAmount},
+            behavior: 'smooth'
+          });
+        `;
+        webView.injectJavaScript(script);
+      }
+    }
+  };
+
   // Expose methods via ref
   useImperativeHandle(ref, () => ({
     closeImageModal,
+    scrollPage,
   }));
 
   return (
