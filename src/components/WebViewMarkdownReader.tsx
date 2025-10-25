@@ -93,6 +93,31 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
       height: auto;
       margin: 10px 0;
       display: block;
+      cursor: pointer;
+    }
+    #imageModal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.9);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+    }
+    #imageModal.active {
+      display: flex;
+    }
+    body.modal-open {
+      overflow: hidden;
+    }
+    #imageModal img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      transition: transform 0.2s;
     }
     table {
       max-width: 100%;
@@ -128,10 +153,111 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
 </head>
 <body>
   <div id="content"></div>
+  <div id="imageModal">
+    <img id="modalImage" />
+  </div>
   <script>
     // Render markdown
     const markdown = ${JSON.stringify(processedMarkdown)};
     document.getElementById('content').innerHTML = marked.parse(markdown);
+
+    // Image modal functionality
+    const modal = document.getElementById('imageModal');
+    const modalImage = document.getElementById('modalImage');
+    window.currentScale = 1;
+    window.currentX = 0;
+    window.currentY = 0;
+    let lastTouchDistance = 0;
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+
+    // Add click listeners to all images
+    function setupImageListeners() {
+      document.querySelectorAll('#content img').forEach(img => {
+        img.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          modalImage.src = img.src;
+          modal.classList.add('active');
+          document.body.classList.add('modal-open');
+          window.currentScale = 1;
+          window.currentX = 0;
+          window.currentY = 0;
+          updateModalImageTransform();
+        });
+      });
+    }
+
+    setupImageListeners();
+
+    // Prevent scrolling on modal
+    modal.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+    }, { passive: false });
+
+    // Close modal on click/tap outside image
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        modal.classList.remove('active');
+        document.body.classList.remove('modal-open');
+      }
+    });
+
+    // Pinch to zoom
+    modalImage.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        const touch1 = e.touches[0];
+        const touch2 = e.touches[1];
+        lastTouchDistance = Math.hypot(
+          touch2.clientX - touch1.clientX,
+          touch2.clientY - touch1.clientY
+        );
+      } else if (e.touches.length === 1) {
+        isDragging = true;
+        dragStartX = e.touches[0].clientX - window.currentX;
+        dragStartY = e.touches[0].clientY - window.currentY;
+      }
+    });
+
+    modalImage.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        const touch1 = e.touches[0];
+        const touch2 = e.touches[1];
+        const distance = Math.hypot(
+          touch2.clientX - touch1.clientX,
+          touch2.clientY - touch1.clientY
+        );
+
+        if (lastTouchDistance > 0) {
+          const scale = distance / lastTouchDistance;
+          window.currentScale = Math.min(Math.max(1, window.currentScale * scale), 5);
+          updateModalImageTransform();
+        }
+        lastTouchDistance = distance;
+      } else if (e.touches.length === 1 && isDragging && window.currentScale > 1) {
+        e.preventDefault();
+        window.currentX = e.touches[0].clientX - dragStartX;
+        window.currentY = e.touches[0].clientY - dragStartY;
+        updateModalImageTransform();
+      }
+    });
+
+    modalImage.addEventListener('touchend', (e) => {
+      if (e.touches.length < 2) {
+        lastTouchDistance = 0;
+      }
+      if (e.touches.length === 0) {
+        isDragging = false;
+      }
+    });
+
+    window.updateModalImageTransform = function() {
+      modalImage.style.transform = \`translate(\${window.currentX}px, \${window.currentY}px) scale(\${window.currentScale})\`;
+    };
+    const updateModalImageTransform = window.updateModalImageTransform;
 
     // Detect text selection
     let selectionTimeout;
@@ -238,6 +364,22 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
                 const img = document.querySelector('img[src="#${placeholderId}"]');
                 if (img) {
                   img.src = ${JSON.stringify(dataUri)};
+                  // Add click listener for image expansion
+                  img.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const modal = document.getElementById('imageModal');
+                    const modalImage = document.getElementById('modalImage');
+                    modalImage.src = img.src;
+                    modal.classList.add('active');
+                    document.body.classList.add('modal-open');
+                    window.currentScale = 1;
+                    window.currentX = 0;
+                    window.currentY = 0;
+                    if (window.updateModalImageTransform) {
+                      window.updateModalImageTransform();
+                    }
+                  });
                 }
               })();
             `;
