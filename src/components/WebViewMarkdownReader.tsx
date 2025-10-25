@@ -75,6 +75,9 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
   <style>
     * {
       margin: 0;
@@ -179,6 +182,19 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     // Render markdown
     const markdown = ${JSON.stringify(processedMarkdown)};
     document.getElementById('content').innerHTML = marked.parse(markdown);
+
+    // Render LaTeX with KaTeX
+    renderMathInElement(document.getElementById('content'), {
+      delimiters: [
+        {left: '$$', right: '$$', display: true},
+        {left: '$', right: '$', display: false},
+        {left: '\\\\[', right: '\\\\]', display: true},
+        {left: '\\\\(', right: '\\\\)', display: false}
+      ],
+      throwOnError: false,
+      errorColor: '#cc0000',
+      strict: false
+    });
 
     // Add IDs to headings after rendering for TOC navigation
     const headings = document.querySelectorAll('#content h1, #content h2, #content h3, #content h4, #content h5, #content h6');
@@ -673,6 +689,21 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
           const contentDiv = document.getElementById('content');
           const tempDiv = document.createElement('div');
           tempDiv.innerHTML = additionalHtml;
+
+          // Render LaTeX in new content
+          if (typeof renderMathInElement !== 'undefined') {
+            renderMathInElement(tempDiv, {
+              delimiters: [
+                {left: '$$', right: '$$', display: true},
+                {left: '$', right: '$', display: false},
+                {left: '\\\\[', right: '\\\\]', display: true},
+                {left: '\\\\(', right: '\\\\)', display: false}
+              ],
+              throwOnError: false,
+              errorColor: '#cc0000',
+              strict: false
+            });
+          }
 
           // Add IDs to new headings
           const newHeadings = tempDiv.querySelectorAll('h1, h2, h3, h4, h5, h6');
