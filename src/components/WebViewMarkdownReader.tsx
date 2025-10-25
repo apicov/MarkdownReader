@@ -34,6 +34,7 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
   const [loading, setLoading] = useState(true);
   const [htmlUri, setHtmlUri] = useState<string | null>(null);
   const [webViewReady, setWebViewReady] = useState(false);
+  const webViewReadyRef = useRef<boolean>(false);
   const pendingImagesRef = useRef<Map<string, string> | null>(null);
   const [isImageExpanded, setIsImageExpanded] = useState(false);
 
@@ -43,6 +44,11 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
   }, [markdown, fontSize, theme]);
 
   const createHtmlFile = async () => {
+    // Reset WebView ready state when creating new HTML
+    setWebViewReady(false);
+    webViewReadyRef.current = false;
+    setLoading(true);
+
     // Replace images with placeholders first, then load them async
     let processedMarkdown = markdown;
     const imagePlaceholders = new Map<string, string>(); // imagePath -> placeholder ID
@@ -362,70 +368,97 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
   const loadImagesAsync = async (imagePlaceholders: Map<string, string>) => {
     try {
       const baseDir = new Directory(baseUrl);
-      const items = baseDir.list();
+
+      // Build file map asynchronously with yielding to prevent UI freeze
       const fileMap = new Map<string, File>();
+      const items = baseDir.list();
+      let processedCount = 0;
 
       for (const item of items) {
+        // Yield to UI thread every 10 items
+        if (processedCount % 10 === 0 && processedCount > 0) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
         if (item instanceof File) {
           fileMap.set(item.name, item);
         }
+        processedCount++;
       }
 
-      // Load images one by one and inject into WebView
-      for (const [imagePath, placeholderId] of imagePlaceholders.entries()) {
-        const file = fileMap.get(imagePath);
-        if (file) {
-          try {
-            const base64 = await file.base64();
-            const ext = file.extension?.toLowerCase() || 'jpeg';
-            const mimeType = ext === 'png' ? 'image/png' :
-                            ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' :
-                            ext === 'gif' ? 'image/gif' :
-                            ext === 'webp' ? 'image/webp' : 'image/jpeg';
-            const dataUri = `data:${mimeType};base64,${base64}`;
+      // Load images in small batches with yielding between batches
+      const imageEntries = Array.from(imagePlaceholders.entries());
+      const BATCH_SIZE = 2; // Process 2 images at a time
 
-            // Inject JavaScript to replace placeholder with actual image
-            const script = `
-              (function() {
-                const img = document.querySelector('img[src="#${placeholderId}"]');
-                if (img) {
-                  img.src = ${JSON.stringify(dataUri)};
-                  // Add click listener for image expansion
-                  img.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const modal = document.getElementById('imageModal');
-                    const modalImage = document.getElementById('modalImage');
-                    modalImage.src = img.src;
-                    modal.classList.add('active');
-                    document.body.classList.add('modal-open');
-                    window.currentScale = 1;
-                    window.currentX = 0;
-                    window.currentY = 0;
-                    if (window.updateModalImageTransform) {
-                      window.updateModalImageTransform();
-                    }
-                    // Notify React Native that image modal is open
-                    window.ReactNativeWebView.postMessage(JSON.stringify({
-                      type: 'imageModalStateChanged',
-                      isOpen: true
-                    }));
-                  });
-                }
-              })();
-            `;
-
-            // Use the WebView ref directly - check if method exists
-            const webView = webViewRef.current as any;
-            if (webView && typeof webView.injectJavaScript === 'function') {
-              webView.injectJavaScript(script);
-            } else {
-              console.error('WebView injectJavaScript not available');
-            }
-          } catch (error) {
-            console.error(`Failed to load image ${imagePath}:`, error);
-          }
+      for (let i = 0; i < imageEntries.length; i += BATCH_SIZE) {
+        // Check if WebView is still available using ref (not state)
+        if (!webViewReadyRef.current || !webViewRef.current) {
+          return;
         }
+
+        // Yield to UI thread between batches
+        if (i > 0) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+
+        const batch = imageEntries.slice(i, i + BATCH_SIZE);
+
+        // Process batch in parallel
+        await Promise.all(batch.map(async ([imagePath, placeholderId]) => {
+          const file = fileMap.get(imagePath);
+          if (file) {
+            try {
+              const base64 = await file.base64();
+              const ext = file.extension?.toLowerCase() || 'jpeg';
+              const mimeType = ext === 'png' ? 'image/png' :
+                              ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' :
+                              ext === 'gif' ? 'image/gif' :
+                              ext === 'webp' ? 'image/webp' : 'image/jpeg';
+              const dataUri = `data:${mimeType};base64,${base64}`;
+
+              // Check WebView readiness before injecting
+              const webView = webViewRef.current as any;
+              if (!webViewReadyRef.current || !webView || typeof webView.injectJavaScript !== 'function') {
+                return; // Skip this image silently
+              }
+
+              // Inject JavaScript to replace placeholder with actual image
+              const script = `
+                (function() {
+                  const img = document.querySelector('img[src="#${placeholderId}"]');
+                  if (img) {
+                    img.src = ${JSON.stringify(dataUri)};
+                    // Add click listener for image expansion
+                    img.addEventListener('click', (e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const modal = document.getElementById('imageModal');
+                      const modalImage = document.getElementById('modalImage');
+                      modalImage.src = img.src;
+                      modal.classList.add('active');
+                      document.body.classList.add('modal-open');
+                      window.currentScale = 1;
+                      window.currentX = 0;
+                      window.currentY = 0;
+                      if (window.updateModalImageTransform) {
+                        window.updateModalImageTransform();
+                      }
+                      // Notify React Native that image modal is open
+                      window.ReactNativeWebView.postMessage(JSON.stringify({
+                        type: 'imageModalStateChanged',
+                        isOpen: true
+                      }));
+                    });
+                  }
+                })();
+              `;
+
+              webView.injectJavaScript(script);
+            } catch (error) {
+              console.error(`Failed to load image ${imagePath}:`, error);
+            }
+          }
+        }));
       }
     } catch (error) {
       console.error('Failed to load images:', error);
@@ -441,6 +474,7 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
       if (data.type === 'loaded') {
         setLoading(false);
         setWebViewReady(true);
+        webViewReadyRef.current = true;
 
         // Load pending images now that WebView is ready
         if (pendingImagesRef.current && pendingImagesRef.current.size > 0) {

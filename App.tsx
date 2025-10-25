@@ -1,7 +1,7 @@
 import React, {useState, useEffect} from 'react';
 import {GestureHandlerRootView} from 'react-native-gesture-handler';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
-import {BackHandler} from 'react-native';
+import {BackHandler, View} from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
 import {ThemeProvider} from './src/contexts/ThemeContext';
 import {SettingsProvider} from './src/contexts/SettingsContext';
@@ -52,22 +52,26 @@ export default function App() {
   };
 
   const renderScreen = () => {
-    switch (currentScreen) {
-      case 'settings':
-        return <SettingsScreen onBack={handleBackToList} />;
-      case 'reader':
-        return selectedDocument ? (
-          <MarkdownReader document={selectedDocument} onBack={handleBackToList} />
-        ) : null;
-      case 'list':
-      default:
-        return (
+    return (
+      <>
+        <View style={{flex: 1, display: currentScreen === 'list' ? 'flex' : 'none'}}>
           <DocumentListScreen
             onDocumentSelect={handleDocumentSelect}
             onOpenSettings={() => setCurrentScreen('settings')}
           />
-        );
-    }
+        </View>
+        {currentScreen === 'settings' && (
+          <View style={{flex: 1}}>
+            <SettingsScreen onBack={handleBackToList} />
+          </View>
+        )}
+        {currentScreen === 'reader' && selectedDocument && (
+          <View style={{flex: 1}}>
+            <MarkdownReader document={selectedDocument} onBack={handleBackToList} />
+          </View>
+        )}
+      </>
+    );
   };
 
   return (

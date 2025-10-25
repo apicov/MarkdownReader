@@ -13,7 +13,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useTheme} from '../contexts/ThemeContext';
 import {useSettings} from '../contexts/SettingsContext';
 import {Document} from '../types';
-import {getDocuments} from '../utils/documentService';
+import {getDocuments, findMarkdownInFolder} from '../utils/documentService';
 
 const DOCUMENTS_CACHE_KEY = '@documents_cache';
 
@@ -62,7 +62,7 @@ export const DocumentListScreen: React.FC<DocumentListScreenProps> = ({
   const loadDocuments = async () => {
     setLoading(true);
     try {
-      const docs = getDocuments(settings.docsPath);
+      const docs = await getDocuments(settings.docsPath);
       setDocuments(docs);
       // Save to cache
       await AsyncStorage.setItem(DOCUMENTS_CACHE_KEY, JSON.stringify(docs));
@@ -102,10 +102,36 @@ export const DocumentListScreen: React.FC<DocumentListScreenProps> = ({
     }
   };
 
+  const handleDocumentSelect = async (item: Document) => {
+    try {
+      // Check if markdown file is already known
+      if (item.markdownFile) {
+        onDocumentSelect(item);
+        return;
+      }
+
+      // Check for markdown file in the folder
+      const markdownFile = await findMarkdownInFolder(item.folderPath);
+
+      if (markdownFile) {
+        const updatedDoc = {...item, markdownFile};
+        onDocumentSelect(updatedDoc);
+      } else {
+        Alert.alert(
+          'No Markdown File',
+          `No markdown file found in "${item.title}"`,
+          [{text: 'OK'}]
+        );
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to access folder');
+    }
+  };
+
   const renderDocument = ({item}: {item: Document}) => (
     <TouchableOpacity
       style={[styles.documentItem, {borderBottomColor: theme.border}]}
-      onPress={() => onDocumentSelect(item)}>
+      onPress={() => handleDocumentSelect(item)}>
       <Text style={[styles.documentTitle, {color: theme.text}]}>
         {item.title}
       </Text>
