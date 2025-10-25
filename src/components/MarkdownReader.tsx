@@ -153,9 +153,6 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
 
   const handleTextSelected = async (text: string) => {
     try {
-      // Highlight the selected text in WebView
-      webViewRef.current?.highlightText(text);
-
       setTranslationModal({
         visible: true,
         translation: '',
@@ -265,42 +262,36 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
               onPress={() => scrollPage('down')}>
               <View style={styles.tapZone} />
             </TouchableOpacity>
+
+            {translationModal.visible && (
+              <View style={styles.translationOverlayAbsolute} pointerEvents="box-none">
+                <SafeAreaView edges={['bottom']} style={styles.translationSafeArea} pointerEvents="box-none">
+                  <View
+                    pointerEvents="auto"
+                    style={[
+                      styles.translationFloating,
+                      {backgroundColor: theme.background, borderColor: theme.border},
+                    ]}>
+                    <TouchableOpacity
+                      style={styles.closeButton}
+                      onPress={() => {
+                        setTranslationModal(prev => ({...prev, visible: false}));
+                      }}>
+                      <Text style={[styles.closeButtonText, {color: theme.text}]}>✕</Text>
+                    </TouchableOpacity>
+                    {translationModal.loading ? (
+                      <ActivityIndicator color={theme.accent} />
+                    ) : (
+                      <Text style={[styles.translationText, {color: theme.text}]}>
+                        {translationModal.translation}
+                      </Text>
+                    )}
+                  </View>
+                </SafeAreaView>
+              </View>
+            )}
           </View>
         )}
-
-        <Modal
-          visible={translationModal.visible}
-          transparent
-          animationType="slide"
-          onRequestClose={() =>
-            setTranslationModal(prev => ({...prev, visible: false}))
-          }>
-          <TouchableOpacity
-            style={styles.translationOverlay}
-            activeOpacity={1}
-            onPress={() => {
-              setTranslationModal(prev => ({...prev, visible: false}));
-              webViewRef.current?.highlightText(''); // Clear highlight
-            }}>
-            <TouchableOpacity activeOpacity={1}>
-              <SafeAreaView edges={['bottom']}>
-                <View
-                  style={[
-                    styles.translationFloating,
-                    {backgroundColor: theme.background, borderColor: theme.border},
-                  ]}>
-                  {translationModal.loading ? (
-                    <ActivityIndicator color={theme.accent} />
-                  ) : (
-                    <Text style={[styles.translationText, {color: theme.text}]}>
-                      {translationModal.translation}
-                    </Text>
-                  )}
-                </View>
-              </SafeAreaView>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </Modal>
 
         <Modal
           visible={fontSizeModalVisible}
@@ -399,16 +390,43 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'flex-end',
   },
+  translationOverlayAbsolute: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+  },
+  translationSafeArea: {
+    width: '100%',
+  },
   translationFloating: {
     padding: 20,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     borderTopWidth: 1,
     minHeight: 80,
+    position: 'relative',
+  },
+  closeButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  closeButtonText: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    opacity: 0.7,
   },
   translationText: {
     fontSize: 16,
     lineHeight: 24,
+    paddingRight: 40,
   },
   themeButton: {
     padding: 8,

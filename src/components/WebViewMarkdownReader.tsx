@@ -13,7 +13,6 @@ interface WebViewMarkdownReaderProps {
 }
 
 export interface WebViewMarkdownReaderRef {
-  highlightText: (text: string) => void;
   closeImageModal: () => boolean;
 }
 
@@ -152,11 +151,6 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     }
     a { color: ${theme.accent}; }
 
-    .highlight {
-      background-color: ${theme.accent}33;
-      padding: 4px;
-      border-radius: 4px;
-    }
   </style>
 </head>
 <body>
@@ -309,7 +303,7 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
       return false;
     };
 
-    // Detect text selection
+    // Detect text selection - wait longer to ensure full selection is captured
     let selectionTimeout;
     document.addEventListener('selectionchange', () => {
       clearTimeout(selectionTimeout);
@@ -324,39 +318,9 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
             text: selectedText
           }));
         }
-      }, 300);
+      }, 500); // Increased timeout to capture full selection
     });
 
-    // Function to highlight text (can be called from React Native)
-    function highlightText(text) {
-      // Remove existing highlights
-      document.querySelectorAll('.highlight').forEach(el => {
-        el.outerHTML = el.innerHTML;
-      });
-
-      if (!text) return;
-
-      // Simple highlighting - wrap matching text in span
-      const walker = document.createTreeWalker(
-        document.getElementById('content'),
-        NodeFilter.SHOW_TEXT,
-        null
-      );
-
-      const textNodes = [];
-      while(walker.nextNode()) {
-        textNodes.push(walker.currentNode);
-      }
-
-      textNodes.forEach(node => {
-        if (node.textContent.includes(text)) {
-          const span = document.createElement('span');
-          span.className = 'highlight';
-          span.textContent = node.textContent;
-          node.parentNode.replaceChild(span, node);
-        }
-      });
-    }
 
     // Signal that page is loaded
     window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -493,16 +457,8 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     return false;
   };
 
-  const highlightText = (text: string) => {
-    const webView = webViewRef.current as any;
-    if (webView && typeof webView.injectJavaScript === 'function') {
-      webView.injectJavaScript(`highlightText(${JSON.stringify(text)});`);
-    }
-  };
-
   // Expose methods via ref
   useImperativeHandle(ref, () => ({
-    highlightText,
     closeImageModal,
   }));
 
