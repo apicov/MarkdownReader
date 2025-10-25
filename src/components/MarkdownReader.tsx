@@ -22,6 +22,7 @@ interface TocItem {
   level: number;
   text: string;
   id: string;
+  hasChildren?: boolean;
 }
 
 interface MarkdownReaderProps {
@@ -102,6 +103,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const hasRestoredPosition = useRef<boolean>(false);
   const [tocItems, setTocItems] = useState<TocItem[]>([]);
   const [tocModalVisible, setTocModalVisible] = useState(false);
+  const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
 
   const scrollPage = (direction: 'up' | 'down') => {
     webViewRef.current?.scrollPage(direction);
@@ -230,6 +232,15 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
       toc.push({ level, text, id });
     }
 
+    // Mark items that have children
+    for (let i = 0; i < toc.length; i++) {
+      const currentLevel = toc[i].level;
+      // Check if next item is a child (has higher level number = deeper nesting)
+      if (i + 1 < toc.length && toc[i + 1].level > currentLevel) {
+        toc[i].hasChildren = true;
+      }
+    }
+
     return toc;
   };
 
@@ -282,6 +293,33 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const handleTocItemPress = (headingId: string) => {
     setTocModalVisible(false);
     webViewRef.current?.scrollToHeading(headingId);
+  };
+
+  const toggleTocItem = (index: number) => {
+    const newExpanded = new Set(expandedItems);
+    if (newExpanded.has(index)) {
+      newExpanded.delete(index);
+    } else {
+      newExpanded.add(index);
+    }
+    setExpandedItems(newExpanded);
+  };
+
+  const shouldShowTocItem = (index: number): boolean => {
+    if (index === 0) return true;
+
+    const currentLevel = tocItems[index].level;
+
+    // Find the parent (previous item with lower level)
+    for (let i = index - 1; i >= 0; i--) {
+      if (tocItems[i].level < currentLevel) {
+        // Found parent, check if it's expanded
+        return expandedItems.has(i) && shouldShowTocItem(i);
+      }
+    }
+
+    // No parent found (top level item)
+    return true;
   };
 
   const handleTextSelected = async (text: string) => {
@@ -534,28 +572,47 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
                 </TouchableOpacity>
               </View>
               <ScrollView style={styles.tocList}>
-                {tocItems.map((item, index) => (
-                  <TouchableOpacity
-                    key={index}
-                    style={[
+                {tocItems.map((item, index) => {
+                  if (!shouldShowTocItem(index)) return null;
+
+                  const isExpanded = expandedItems.has(index);
+
+                  return (
+                    <View key={index} style={[
                       styles.tocItem,
                       {paddingLeft: (item.level - 1) * 16 + 16},
-                    ]}
-                    onPress={() => handleTocItemPress(item.id)}>
-                    <Text
-                      style={[
-                        styles.tocItemText,
-                        {
-                          color: theme.text,
-                          fontSize: Math.max(14, 18 - item.level),
-                          fontWeight: item.level === 1 ? 'bold' : item.level === 2 ? '600' : 'normal',
-                        },
-                      ]}
-                      numberOfLines={2}>
-                      {item.text}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                    ]}>
+                      <View style={styles.tocItemRow}>
+                        {item.hasChildren && (
+                          <TouchableOpacity
+                            onPress={() => toggleTocItem(index)}
+                            style={styles.tocExpandButton}
+                            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+                            <Text style={[styles.tocExpandIcon, {color: theme.accent}]}>
+                              {isExpanded ? '−' : '+'}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                        <TouchableOpacity
+                          style={[styles.tocItemTextContainer, !item.hasChildren && styles.tocItemTextContainerNoIcon]}
+                          onPress={() => handleTocItemPress(item.id)}>
+                          <Text
+                            style={[
+                              styles.tocItemText,
+                              {
+                                color: theme.text,
+                                fontSize: Math.max(14, 18 - item.level),
+                                fontWeight: item.level === 1 ? 'bold' : item.level === 2 ? '600' : 'normal',
+                              },
+                            ]}
+                            numberOfLines={2}>
+                            {item.text}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })}
               </ScrollView>
             </TouchableOpacity>
           </TouchableOpacity>
@@ -751,10 +808,32 @@ const styles = StyleSheet.create({
     maxHeight: '100%',
   },
   tocItem: {
-    paddingVertical: 12,
+    paddingVertical: 8,
     paddingRight: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
+  },
+  tocItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  tocExpandButton: {
+    width: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  tocExpandIcon: {
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  tocItemTextContainer: {
+    flex: 1,
+    paddingVertical: 4,
+  },
+  tocItemTextContainerNoIcon: {
+    marginLeft: 32,
   },
   tocItemText: {
     lineHeight: 20,
