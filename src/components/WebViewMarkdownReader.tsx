@@ -1,25 +1,51 @@
-import React, {useRef, useState} from 'react';
+import React, {useRef, useState, useEffect} from 'react';
 import {View, StyleSheet, ActivityIndicator} from 'react-native';
 import WebView from 'react-native-webview';
 import {useTheme} from '../contexts/ThemeContext';
+import {File, Directory, Paths} from 'expo-file-system';
 
 interface WebViewMarkdownReaderProps {
   markdown: string;
   fontSize: number;
+  baseUrl?: string;
   onTextSelected?: (text: string) => void;
 }
 
 export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
   markdown,
   fontSize,
+  baseUrl = '',
   onTextSelected,
 }) => {
   const {theme} = useTheme();
   const webViewRef = useRef<WebView>(null);
   const [loading, setLoading] = useState(true);
+  const [htmlUri, setHtmlUri] = useState<string | null>(null);
+  const [webViewReady, setWebViewReady] = useState(false);
+  const pendingImagesRef = useRef<Map<string, string> | null>(null);
 
-  // Generate HTML with markdown rendering and text selection support
-  const html = `
+  // Create HTML file when markdown or theme changes
+  useEffect(() => {
+    createHtmlFile();
+  }, [markdown, fontSize, theme]);
+
+  const createHtmlFile = async () => {
+    // Replace images with placeholders first, then load them async
+    let processedMarkdown = markdown;
+    const imagePlaceholders = new Map<string, string>(); // imagePath -> placeholder ID
+
+    if (baseUrl) {
+      // Replace image paths with placeholder IDs
+      let placeholderIndex = 0;
+      processedMarkdown = markdown.replace(/!\[([^\]]*)\]\((?!http)([^)]+)\)/g, (match, alt, imagePath) => {
+        const cleanPath = imagePath.trim().replace(/^\.?\//, '');
+        const placeholderId = `img-placeholder-${placeholderIndex++}`;
+        imagePlaceholders.set(cleanPath, placeholderId);
+        return `![${alt}](#${placeholderId})`;
+      });
+    }
+
+    const html = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -104,7 +130,7 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
   <div id="content"></div>
   <script>
     // Render markdown
-    const markdown = ${JSON.stringify(markdown)};
+    const markdown = ${JSON.stringify(processedMarkdown)};
     document.getElementById('content').innerHTML = marked.parse(markdown);
 
     // Detect text selection
@@ -163,7 +189,75 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
   </script>
 </body>
 </html>
-  `;
+`;
+
+    try {
+      // Write HTML to temporary file using new File API
+      const tempFileName = `markdown_${Date.now()}.html`;
+      const tempHtmlFile = new File(Paths.cache, tempFileName);
+      await tempHtmlFile.write(html);
+      setHtmlUri(tempHtmlFile.uri);
+
+      // Store pending images to load after WebView is ready
+      if (baseUrl && imagePlaceholders.size > 0) {
+        pendingImagesRef.current = imagePlaceholders;
+      }
+    } catch (error) {
+      console.error('Error creating HTML file:', error);
+    }
+  };
+
+  const loadImagesAsync = async (imagePlaceholders: Map<string, string>) => {
+    try {
+      const baseDir = new Directory(baseUrl);
+      const items = baseDir.list();
+      const fileMap = new Map<string, File>();
+
+      for (const item of items) {
+        if (item instanceof File) {
+          fileMap.set(item.name, item);
+        }
+      }
+
+      // Load images one by one and inject into WebView
+      for (const [imagePath, placeholderId] of imagePlaceholders.entries()) {
+        const file = fileMap.get(imagePath);
+        if (file) {
+          try {
+            const base64 = await file.base64();
+            const ext = file.extension?.toLowerCase() || 'jpeg';
+            const mimeType = ext === 'png' ? 'image/png' :
+                            ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' :
+                            ext === 'gif' ? 'image/gif' :
+                            ext === 'webp' ? 'image/webp' : 'image/jpeg';
+            const dataUri = `data:${mimeType};base64,${base64}`;
+
+            // Inject JavaScript to replace placeholder with actual image
+            const script = `
+              (function() {
+                const img = document.querySelector('img[src="#${placeholderId}"]');
+                if (img) {
+                  img.src = ${JSON.stringify(dataUri)};
+                }
+              })();
+            `;
+
+            // Use the WebView ref directly - check if method exists
+            const webView = webViewRef.current as any;
+            if (webView && typeof webView.injectJavaScript === 'function') {
+              webView.injectJavaScript(script);
+            } else {
+              console.error('WebView injectJavaScript not available');
+            }
+          } catch (error) {
+            console.error(`Failed to load image ${imagePath}:`, error);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load images:', error);
+    }
+  };
 
   const handleMessage = (event: any) => {
     try {
@@ -171,6 +265,13 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
 
       if (data.type === 'loaded') {
         setLoading(false);
+        setWebViewReady(true);
+
+        // Load pending images now that WebView is ready
+        if (pendingImagesRef.current && pendingImagesRef.current.size > 0) {
+          loadImagesAsync(pendingImagesRef.current);
+          pendingImagesRef.current = null;
+        }
       } else if (data.type === 'textSelected' && onTextSelected) {
         onTextSelected(data.text);
       }
@@ -180,32 +281,36 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
   };
 
   const highlightText = (text: string) => {
-    webViewRef.current?.injectJavaScript(`highlightText(${JSON.stringify(text)});`);
+    const webView = webViewRef.current as any;
+    if (webView && typeof webView.injectJavaScript === 'function') {
+      webView.injectJavaScript(`highlightText(${JSON.stringify(text)});`);
+    }
   };
-
-  // Expose highlightText method
-  React.useImperativeHandle(webViewRef, () => ({
-    highlightText,
-  }));
 
   return (
     <View style={styles.container}>
-      {loading && (
+      {(loading || !htmlUri) && (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color={theme.accent} />
         </View>
       )}
-      <WebView
-        ref={webViewRef}
-        source={{html}}
-        onMessage={handleMessage}
-        style={styles.webview}
-        showsVerticalScrollIndicator={true}
-        showsHorizontalScrollIndicator={false}
-        scrollEnabled={true}
-        nestedScrollEnabled={true}
-        scalesPageToFit={false}
-      />
+      {htmlUri && (
+        <WebView
+          ref={webViewRef}
+          source={{uri: htmlUri}}
+          originWhitelist={['*']}
+          allowFileAccess={true}
+          allowFileAccessFromFileURLs={true}
+          allowUniversalAccessFromFileURLs={true}
+          onMessage={handleMessage}
+          style={styles.webview}
+          showsVerticalScrollIndicator={true}
+          showsHorizontalScrollIndicator={false}
+          scrollEnabled={true}
+          nestedScrollEnabled={true}
+          scalesPageToFit={false}
+        />
+      )}
     </View>
   );
 };

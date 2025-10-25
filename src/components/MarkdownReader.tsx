@@ -84,7 +84,16 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   });
   const [fontSizeModalVisible, setFontSizeModalVisible] = useState(false);
   const [isReady, setIsReady] = useState(false);
+  const [baseUrl, setBaseUrl] = useState('');
   const webViewRef = useRef<any>(null);
+
+  const scrollPage = (direction: 'up' | 'down') => {
+    const scrollAmount = 500; // Pixels to scroll
+    const script = direction === 'up'
+      ? `window.scrollBy(0, -${scrollAmount});`
+      : `window.scrollBy(0, ${scrollAmount});`;
+    webViewRef.current?.injectJavaScript(script);
+  };
 
   useEffect(() => {
     loadDocument();
@@ -95,6 +104,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     try {
       const md = await readMarkdownFile(document.markdownFile);
       setContent(md);
+      setBaseUrl(document.folderPath);
       setIsReady(true);
     } catch (error) {
       console.error('Error loading document:', error);
@@ -194,12 +204,29 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
             </Text>
           </View>
         ) : (
-          <WebViewMarkdownReader
-            ref={webViewRef}
-            markdown={content}
-            fontSize={fontSize}
-            onTextSelected={handleTextSelected}
-          />
+          <View style={styles.contentContainer}>
+            <TouchableOpacity
+              style={styles.tapArea}
+              activeOpacity={1}
+              onPress={() => scrollPage('up')}>
+              <View style={styles.tapZone} />
+            </TouchableOpacity>
+
+            <WebViewMarkdownReader
+              ref={webViewRef}
+              markdown={content}
+              fontSize={fontSize}
+              baseUrl={baseUrl}
+              onTextSelected={handleTextSelected}
+            />
+
+            <TouchableOpacity
+              style={styles.tapArea}
+              activeOpacity={1}
+              onPress={() => scrollPage('down')}>
+              <View style={styles.tapZone} />
+            </TouchableOpacity>
+          </View>
         )}
 
         <Modal
@@ -311,6 +338,17 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 12,
     fontSize: 16,
+  },
+  contentContainer: {
+    flex: 1,
+    flexDirection: 'row',
+  },
+  tapArea: {
+    width: 40,
+    justifyContent: 'center',
+  },
+  tapZone: {
+    flex: 1,
   },
   modalOverlay: {
     flex: 1,
