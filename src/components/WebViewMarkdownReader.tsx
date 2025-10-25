@@ -171,6 +171,8 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
     let isDragging = false;
     let dragStartX = 0;
     let dragStartY = 0;
+    let wasPinching = false;
+    let pinchEndTime = 0;
 
     // Add click listeners to all images
     function setupImageListeners() {
@@ -208,6 +210,7 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
     modalImage.addEventListener('touchstart', (e) => {
       if (e.touches.length === 2) {
         e.preventDefault();
+        wasPinching = true;
         const touch1 = e.touches[0];
         const touch2 = e.touches[1];
         lastTouchDistance = Math.hypot(
@@ -215,15 +218,20 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
           touch2.clientY - touch1.clientY
         );
       } else if (e.touches.length === 1) {
-        isDragging = true;
-        dragStartX = e.touches[0].clientX - window.currentX;
-        dragStartY = e.touches[0].clientY - window.currentY;
+        // Don't start dragging immediately after pinch (300ms grace period)
+        const timeSincePinch = Date.now() - pinchEndTime;
+        if (!wasPinching || timeSincePinch > 300) {
+          isDragging = true;
+          dragStartX = e.touches[0].clientX - window.currentX;
+          dragStartY = e.touches[0].clientY - window.currentY;
+        }
       }
     });
 
     modalImage.addEventListener('touchmove', (e) => {
       if (e.touches.length === 2) {
         e.preventDefault();
+        wasPinching = true;
         const touch1 = e.touches[0];
         const touch2 = e.touches[1];
         const distance = Math.hypot(
@@ -238,19 +246,29 @@ export const WebViewMarkdownReader: React.FC<WebViewMarkdownReaderProps> = ({
         }
         lastTouchDistance = distance;
       } else if (e.touches.length === 1 && isDragging && window.currentScale > 1) {
-        e.preventDefault();
-        window.currentX = e.touches[0].clientX - dragStartX;
-        window.currentY = e.touches[0].clientY - dragStartY;
-        updateModalImageTransform();
+        // Don't drag if we just finished pinching
+        const timeSincePinch = Date.now() - pinchEndTime;
+        if (!wasPinching || timeSincePinch > 300) {
+          e.preventDefault();
+          window.currentX = e.touches[0].clientX - dragStartX;
+          window.currentY = e.touches[0].clientY - dragStartY;
+          updateModalImageTransform();
+        }
       }
     });
 
     modalImage.addEventListener('touchend', (e) => {
       if (e.touches.length < 2) {
         lastTouchDistance = 0;
+        if (wasPinching) {
+          pinchEndTime = Date.now();
+        }
       }
       if (e.touches.length === 0) {
         isDragging = false;
+        setTimeout(() => {
+          wasPinching = false;
+        }, 300);
       }
     });
 
