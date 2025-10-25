@@ -27,4 +27,5 @@ export interface AppSettings {
   llmApiKey?: string;
   llmModel?: string;
   targetLanguage?: string;
+  translationEnabled?: boolean;
 }

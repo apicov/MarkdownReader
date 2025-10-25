@@ -10,6 +10,7 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  Switch,
 } from 'react-native';
 import {Directory} from 'expo-file-system';
 import {useTheme} from '../contexts/ThemeContext';
@@ -29,6 +30,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
   const [llmApiKey, setLlmApiKey] = useState(settings.llmApiKey || '');
   const [llmModel, setLlmModel] = useState(settings.llmModel || '');
   const [targetLanguage, setTargetLanguage] = useState(settings.targetLanguage || '');
+  const [translationEnabled, setTranslationEnabled] = useState(settings.translationEnabled ?? true);
 
   const handlePickFolder = async () => {
     try {
@@ -55,6 +57,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
       llmApiKey,
       llmModel,
       targetLanguage,
+      translationEnabled,
     });
 
     Alert.alert('Settings Saved', 'Your settings have been updated successfully');
@@ -77,6 +80,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
             setLlmApiKey('');
             setLlmModel('');
             setTargetLanguage('');
+            setTranslationEnabled(true);
             await updateSettings({
               docsPath: '',
               fontSize: 16,
@@ -84,6 +88,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
               llmApiKey: '',
               llmModel: '',
               targetLanguage: '',
+              translationEnabled: true,
             });
           },
         },
@@ -174,6 +179,20 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
           <Text style={[styles.sectionTitle, {color: theme.text}]}>
             Translation (LLM)
           </Text>
+
+          <View style={styles.switchContainer}>
+            <Text style={[styles.label, {color: theme.text}]}>Enable Translation</Text>
+            <Switch
+              value={translationEnabled}
+              onValueChange={setTranslationEnabled}
+              trackColor={{false: theme.border, true: theme.accent}}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+          <Text style={[styles.hint, {color: theme.text, marginBottom: 16}]}>
+            When disabled, text selection will not trigger translation
+          </Text>
+
           <Text style={[styles.label, {color: theme.text}]}>API URL</Text>
           <TextInput
             style={[
@@ -374,5 +393,11 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
+  },
+  switchContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
   },
 });

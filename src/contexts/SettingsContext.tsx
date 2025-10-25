@@ -22,6 +22,7 @@ const defaultSettings: AppSettings = {
   llmApiKey: '',
   llmModel: '',
   targetLanguage: '',
+  translationEnabled: true,
 };
 
 const SettingsContext = createContext<SettingsContextType | undefined>(

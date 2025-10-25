@@ -226,6 +226,11 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   };
 
   const handleTextSelected = async (text: string) => {
+    // Check if translation is enabled in settings
+    if (!settings.translationEnabled) {
+      return;
+    }
+
     try {
       setTranslationModal({
         visible: true,
