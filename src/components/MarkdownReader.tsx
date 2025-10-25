@@ -231,6 +231,34 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
       return;
     }
 
+    // Validate configuration before making the request
+    if (!settings.llmApiUrl) {
+      Alert.alert(
+        'Translation Error',
+        'API URL is not configured. Please set it in Settings.',
+        [{text: 'OK'}]
+      );
+      return;
+    }
+
+    if (!settings.llmApiKey) {
+      Alert.alert(
+        'Translation Error',
+        'API Key is not configured. Please set it in Settings.',
+        [{text: 'OK'}]
+      );
+      return;
+    }
+
+    if (!settings.llmModel) {
+      Alert.alert(
+        'Translation Error',
+        'Model is not configured. Please set it in Settings.',
+        [{text: 'OK'}]
+      );
+      return;
+    }
+
     try {
       setTranslationModal({
         visible: true,
@@ -241,14 +269,14 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
       const targetLanguage = settings.targetLanguage || 'Spanish';
       const prompt = `Translate the following text to ${targetLanguage}. If the text is already in ${targetLanguage}, rewrite it in a simpler and more understandable way:\n\n${text}`;
 
-      const response = await fetch(settings.llmApiUrl || '', {
+      const response = await fetch(settings.llmApiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${settings.llmApiKey}`,
         },
         body: JSON.stringify({
-          model: settings.llmModel || 'gpt-3.5-turbo',
+          model: settings.llmModel,
           messages: [
             {
               role: 'system',
@@ -264,24 +292,67 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
       });
 
       if (!response.ok) {
-        throw new Error(`API request failed: ${response.statusText}`);
+        let errorTitle = 'Translation Error';
+        let errorMessage = '';
+
+        if (response.status === 401) {
+          errorMessage = 'Invalid API Key. Please check your credentials in Settings.';
+        } else if (response.status === 404) {
+          errorMessage = 'Invalid API URL or endpoint not found. Please check the URL in Settings.';
+        } else if (response.status === 429) {
+          errorMessage = 'Rate limit exceeded. Please try again later.';
+        } else if (response.status === 400) {
+          errorMessage = 'Invalid request. Please check your Model name in Settings.';
+        } else if (response.status >= 500) {
+          errorMessage = 'Server error. Please try again later.';
+        } else {
+          errorMessage = `Error ${response.status}: ${response.statusText}`;
+        }
+
+        // Close the loading modal
+        setTranslationModal({
+          visible: false,
+          translation: '',
+          loading: false,
+        });
+
+        // Show alert dialog
+        Alert.alert(errorTitle, errorMessage, [{text: 'OK'}]);
+        return;
       }
 
       const data = await response.json();
       const result = data.choices?.[0]?.message?.content || 'No translation available';
 
-      setTranslationModal(prev => ({
-        ...prev,
-        translation: result,
-        loading: false,
-      }));
-    } catch (error) {
-      console.error('Translation error:', error);
       setTranslationModal({
         visible: true,
-        translation: 'Failed to translate. Please configure API settings.',
+        translation: result,
         loading: false,
       });
+    } catch (error) {
+      console.error('Translation error:', error);
+
+      let errorMessage = '';
+
+      if (error instanceof Error) {
+        if (error.message.includes('Failed to fetch') || error.message.includes('Network request failed')) {
+          errorMessage = 'Network error. Please check your internet connection.';
+        } else {
+          errorMessage = error.message;
+        }
+      } else {
+        errorMessage = 'Unknown error occurred. Please try again.';
+      }
+
+      // Close the loading modal
+      setTranslationModal({
+        visible: false,
+        translation: '',
+        loading: false,
+      });
+
+      // Show alert dialog
+      Alert.alert('Translation Error', errorMessage, [{text: 'OK'}]);
     }
   };
 
