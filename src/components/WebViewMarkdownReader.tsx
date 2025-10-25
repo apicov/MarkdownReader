@@ -18,6 +18,7 @@ export interface WebViewMarkdownReaderRef {
   scrollPage: (direction: 'up' | 'down') => void;
   getScrollPosition: () => Promise<number>;
   scrollToPosition: (position: number) => void;
+  scrollToHeading: (headingId: string) => void;
 }
 
 export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebViewMarkdownReaderProps>(({
@@ -167,6 +168,12 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     // Render markdown
     const markdown = ${JSON.stringify(processedMarkdown)};
     document.getElementById('content').innerHTML = marked.parse(markdown);
+
+    // Add IDs to headings after rendering for TOC navigation
+    const headings = document.querySelectorAll('#content h1, #content h2, #content h3, #content h4, #content h5, #content h6');
+    headings.forEach((heading, index) => {
+      heading.id = 'heading-' + index;
+    });
 
     // Image modal functionality
     const modal = document.getElementById('imageModal');
@@ -543,12 +550,32 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     }
   };
 
+  const scrollToHeading = (headingId: string) => {
+    if (!webViewReady || !webViewRef.current) {
+      return;
+    }
+
+    const webView = webViewRef.current as any;
+    if (webView && typeof webView.injectJavaScript === 'function') {
+      const script = `
+        (function() {
+          const element = document.getElementById('${headingId}');
+          if (element) {
+            element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        })();
+      `;
+      webView.injectJavaScript(script);
+    }
+  };
+
   // Expose methods via ref
   useImperativeHandle(ref, () => ({
     closeImageModal,
     scrollPage,
     getScrollPosition,
     scrollToPosition,
+    scrollToHeading,
   }));
 
   return (

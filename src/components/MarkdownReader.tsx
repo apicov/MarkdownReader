@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   BackHandler,
   Alert,
+  ScrollView,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../contexts/ThemeContext';
@@ -16,6 +17,12 @@ import {Document} from '../types';
 import {readMarkdownFile} from '../utils/documentService';
 import {WebViewMarkdownReader, WebViewMarkdownReaderRef} from './WebViewMarkdownReader';
 import {saveReadingPosition, getReadingPosition} from '../utils/readingPositionService';
+
+interface TocItem {
+  level: number;
+  text: string;
+  id: string;
+}
 
 interface MarkdownReaderProps {
   document: Document;
@@ -93,6 +100,8 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const [webViewLoaded, setWebViewLoaded] = useState(false);
   const scrollPositionToRestore = useRef<number | null>(null);
   const hasRestoredPosition = useRef<boolean>(false);
+  const [tocItems, setTocItems] = useState<TocItem[]>([]);
+  const [tocModalVisible, setTocModalVisible] = useState(false);
 
   const scrollPage = (direction: 'up' | 'down') => {
     webViewRef.current?.scrollPage(direction);
@@ -184,6 +193,46 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     };
   }, [document.id]);
 
+  const extractTocFromMarkdown = (markdown: string): TocItem[] => {
+    const headingRegex = /^(#{1,6})\s+(.+)$/gm;
+    const toc: TocItem[] = [];
+    let match;
+    let index = 0;
+
+    while ((match = headingRegex.exec(markdown)) !== null) {
+      const level = match[1].length;
+      let text = match[2].trim();
+
+      // Clean up markdown formatting from heading text
+      // Remove bold/italic
+      text = text.replace(/\*\*(.+?)\*\*/g, '$1');  // **bold**
+      text = text.replace(/\*(.+?)\*/g, '$1');      // *italic*
+      text = text.replace(/__(.+?)__/g, '$1');      // __bold__
+      text = text.replace(/_(.+?)_/g, '$1');        // _italic_
+
+      // Remove inline code
+      text = text.replace(/`(.+?)`/g, '$1');        // `code`
+
+      // Remove links but keep text
+      text = text.replace(/\[(.+?)\]\(.+?\)/g, '$1'); // [text](url)
+
+      // Remove HTML tags
+      text = text.replace(/<[^>]+>/g, '');
+
+      // Decode common HTML entities
+      text = text.replace(/&nbsp;/g, ' ');
+      text = text.replace(/&lt;/g, '<');
+      text = text.replace(/&gt;/g, '>');
+      text = text.replace(/&amp;/g, '&');
+      text = text.replace(/&quot;/g, '"');
+
+      const id = `heading-${index++}`;
+      toc.push({ level, text, id });
+    }
+
+    return toc;
+  };
+
   const loadDocument = async () => {
     setIsReady(false);
     setWebViewLoaded(false);
@@ -192,6 +241,11 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
       const md = await readMarkdownFile(document.markdownFile);
       setContent(md);
       setBaseUrl(document.folderPath);
+
+      // Extract TOC from markdown
+      const toc = extractTocFromMarkdown(md);
+      setTocItems(toc);
+
       setIsReady(true);
 
       // Load saved position to restore later when WebView is ready
@@ -223,6 +277,11 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
 
   const handleImageModalStateChange = (isOpen: boolean) => {
     setIsImageExpanded(isOpen);
+  };
+
+  const handleTocItemPress = (headingId: string) => {
+    setTocModalVisible(false);
+    webViewRef.current?.scrollToHeading(headingId);
   };
 
   const handleTextSelected = async (text: string) => {
@@ -369,6 +428,14 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
           numberOfLines={1}>
           {document.title}
         </Text>
+        <TouchableOpacity
+          onPress={() => setTocModalVisible(true)}
+          style={styles.themeButton}
+          disabled={tocItems.length === 0}>
+          <Text style={[styles.themeButtonText, {color: tocItems.length > 0 ? theme.accent : theme.border}]}>
+            ≡
+          </Text>
+        </TouchableOpacity>
         <TouchableOpacity onPress={() => setFontSizeModalVisible(true)} style={styles.themeButton}>
           <Text style={[styles.themeButtonText, {color: theme.accent}]}>
             Aa
@@ -443,6 +510,56 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
             )}
           </SafeAreaView>
         )}
+
+        <Modal
+          visible={tocModalVisible}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setTocModalVisible(false)}>
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setTocModalVisible(false)}>
+            <TouchableOpacity
+              activeOpacity={1}
+              onPress={(e) => e.stopPropagation()}
+              style={[
+                styles.tocModal,
+                {backgroundColor: theme.background, borderColor: theme.border},
+              ]}>
+              <View style={styles.tocHeader}>
+                <Text style={[styles.tocTitle, {color: theme.text}]}>Table of Contents</Text>
+                <TouchableOpacity onPress={() => setTocModalVisible(false)}>
+                  <Text style={[styles.closeButtonText, {color: theme.text}]}>✕</Text>
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={styles.tocList}>
+                {tocItems.map((item, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={[
+                      styles.tocItem,
+                      {paddingLeft: (item.level - 1) * 16 + 16},
+                    ]}
+                    onPress={() => handleTocItemPress(item.id)}>
+                    <Text
+                      style={[
+                        styles.tocItemText,
+                        {
+                          color: theme.text,
+                          fontSize: Math.max(14, 18 - item.level),
+                          fontWeight: item.level === 1 ? 'bold' : item.level === 2 ? '600' : 'normal',
+                        },
+                      ]}
+                      numberOfLines={2}>
+                      {item.text}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
 
         <Modal
           visible={fontSizeModalVisible}
@@ -608,5 +725,41 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 32,
     fontWeight: 'bold',
+  },
+  tocModal: {
+    width: '85%',
+    maxHeight: '70%',
+    marginTop: 'auto',
+    marginBottom: 'auto',
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  tocHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  tocTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  tocList: {
+    maxHeight: '100%',
+  },
+  tocItem: {
+    paddingVertical: 12,
+    paddingRight: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  tocItemText: {
+    lineHeight: 20,
+  },
+  modalLabel: {
+    fontSize: 16,
   },
 });
