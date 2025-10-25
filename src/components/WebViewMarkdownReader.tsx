@@ -11,6 +11,8 @@ interface WebViewMarkdownReaderProps {
   onTextSelected?: (text: string) => void;
   onImageModalStateChange?: (isOpen: boolean) => void;
   onWebViewLoaded?: () => void;
+  onScrollNearEnd?: () => void;
+  onScrollNearStart?: () => void;
 }
 
 export interface WebViewMarkdownReaderRef {
@@ -19,6 +21,7 @@ export interface WebViewMarkdownReaderRef {
   getScrollPosition: () => Promise<number>;
   scrollToPosition: (position: number) => void;
   scrollToHeading: (headingId: string) => void;
+  appendContent: (additionalMarkdown: string) => void;
 }
 
 export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebViewMarkdownReaderProps>(({
@@ -28,6 +31,8 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
   onTextSelected,
   onImageModalStateChange,
   onWebViewLoaded,
+  onScrollNearEnd,
+  onScrollNearStart,
 }, ref) => {
   const {theme} = useTheme();
   const webViewRef = useRef<WebView>(null);
@@ -339,6 +344,33 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
       }, 500); // Increased timeout to capture full selection
     });
 
+    // Detect scroll near end or start to trigger loading more content
+    let scrollTimeout;
+    window.addEventListener('scroll', () => {
+      clearTimeout(scrollTimeout);
+      scrollTimeout = setTimeout(() => {
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        const windowHeight = window.innerHeight;
+        const documentHeight = document.documentElement.scrollHeight;
+
+        // Trigger when user is within 2 viewports of the bottom
+        const triggerDistance = windowHeight * 2;
+        const distanceFromBottom = documentHeight - (scrollTop + windowHeight);
+
+        if (distanceFromBottom < triggerDistance) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'scrollNearEnd'
+          }));
+        }
+
+        // Trigger when user is within 2 viewports of the top
+        if (scrollTop < triggerDistance) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'scrollNearStart'
+          }));
+        }
+      }, 200);
+    });
 
     // Signal that page is loaded
     window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -496,6 +528,10 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
       } else if (data.type === 'scrollPosition' && scrollPositionResolverRef.current) {
         scrollPositionResolverRef.current(data.position);
         scrollPositionResolverRef.current = null;
+      } else if (data.type === 'scrollNearEnd' && onScrollNearEnd) {
+        onScrollNearEnd();
+      } else if (data.type === 'scrollNearStart' && onScrollNearStart) {
+        onScrollNearStart();
       }
     } catch (error) {
       console.error('Error parsing WebView message:', error);
@@ -603,6 +639,83 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     }
   };
 
+  const appendContent = (additionalMarkdown: string) => {
+    if (!webViewReady || !webViewRef.current) {
+      return;
+    }
+
+    const webView = webViewRef.current as any;
+    if (webView && typeof webView.injectJavaScript === 'function') {
+      // Process images in the additional markdown the same way as initial load
+      let processedMarkdown = additionalMarkdown;
+      const imagePlaceholders = new Map<string, string>();
+
+      if (baseUrl) {
+        let placeholderIndex = Date.now(); // Use timestamp to ensure unique IDs
+        processedMarkdown = additionalMarkdown.replace(/!\[([^\]]*)\]\((?!http)([^)]+)\)/g, (match, alt, imagePath) => {
+          const cleanPath = imagePath.trim().replace(/^\.?\//, '');
+          const placeholderId = `img-placeholder-${placeholderIndex++}`;
+          imagePlaceholders.set(cleanPath, placeholderId);
+          return `![${alt}](#${placeholderId})`;
+        });
+      }
+
+      const script = `
+        (function() {
+          const additionalMarkdown = ${JSON.stringify(processedMarkdown)};
+          const additionalHtml = marked.parse(additionalMarkdown);
+
+          // Get current heading count to continue ID sequence
+          const existingHeadings = document.querySelectorAll('#content h1, #content h2, #content h3, #content h4, #content h5, #content h6');
+          let headingIndex = existingHeadings.length;
+
+          // Append new content
+          const contentDiv = document.getElementById('content');
+          const tempDiv = document.createElement('div');
+          tempDiv.innerHTML = additionalHtml;
+
+          // Add IDs to new headings
+          const newHeadings = tempDiv.querySelectorAll('h1, h2, h3, h4, h5, h6');
+          newHeadings.forEach(heading => {
+            heading.id = 'heading-' + headingIndex++;
+          });
+
+          // Add click listeners to new images
+          const newImages = tempDiv.querySelectorAll('img');
+          newImages.forEach(img => {
+            img.addEventListener('click', (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const modal = document.getElementById('imageModal');
+              const modalImage = document.getElementById('modalImage');
+              modalImage.src = img.src;
+              modal.classList.add('active');
+              document.body.classList.add('modal-open');
+              window.currentScale = 1;
+              window.currentX = 0;
+              window.currentY = 0;
+              if (window.updateModalImageTransform) {
+                window.updateModalImageTransform();
+              }
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'imageModalStateChanged',
+                isOpen: true
+              }));
+            });
+          });
+
+          contentDiv.appendChild(tempDiv);
+        })();
+      `;
+      webView.injectJavaScript(script);
+
+      // Load images asynchronously if there are any
+      if (imagePlaceholders.size > 0) {
+        loadImagesAsync(imagePlaceholders);
+      }
+    }
+  };
+
   // Expose methods via ref
   useImperativeHandle(ref, () => ({
     closeImageModal,
@@ -610,6 +723,7 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     getScrollPosition,
     scrollToPosition,
     scrollToHeading,
+    appendContent,
   }));
 
   return (

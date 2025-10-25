@@ -104,6 +104,11 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const [tocItems, setTocItems] = useState<TocItem[]>([]);
   const [tocModalVisible, setTocModalVisible] = useState(false);
   const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
+  const fullMarkdownRef = useRef<string>('');
+  const currentLoadedEndRef = useRef<number>(0);
+  const isLoadingMoreRef = useRef<boolean>(false);
+  const lastScrollEventTime = useRef<number>(0);
+  const CHUNK_SIZE = 100000; // Larger chunks to reduce loading frequency
 
   const scrollPage = (direction: 'up' | 'down') => {
     webViewRef.current?.scrollPage(direction);
@@ -127,7 +132,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
         {
           text: 'Close',
           onPress: async () => {
-            // Save scroll position only when user confirms close
+            // Save scroll position when user confirms close
             try {
               const scrollPosition = await webViewRef.current?.getScrollPosition();
               if (scrollPosition !== undefined && scrollPosition >= 0) {
@@ -176,7 +181,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   useEffect(() => {
     loadDocument();
 
-    // Save position on unmount - store current ref in variable to avoid stale closure
+    // Save position on unmount
     const currentWebViewRef = webViewRef;
     const currentDocumentId = document.id;
 
@@ -247,27 +252,76 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const loadDocument = async () => {
     setIsReady(false);
     setWebViewLoaded(false);
-    hasRestoredPosition.current = false; // Reset restoration flag
+    hasRestoredPosition.current = false;
+    isLoadingMoreRef.current = false;
     try {
-      const md = await readMarkdownFile(document.markdownFile);
-      setContent(md);
-      setBaseUrl(document.folderPath);
+      // Read the full markdown to extract TOC (lightweight operation)
+      const fullMarkdown = await readMarkdownFile(document.markdownFile);
+      fullMarkdownRef.current = fullMarkdown;
 
-      // Extract TOC from markdown
-      const toc = extractTocFromMarkdown(md);
+      // Extract TOC from full markdown
+      const toc = extractTocFromMarkdown(fullMarkdown);
       setTocItems(toc);
 
-      setIsReady(true);
+      // Load initial chunk only
+      const initialEnd = Math.min(CHUNK_SIZE, fullMarkdown.length);
+      const initialContent = fullMarkdown.substring(0, initialEnd);
+      currentLoadedEndRef.current = initialEnd;
 
-      // Load saved position to restore later when WebView is ready
+      console.log(`Document: ${fullMarkdown.length} chars, loading first ${initialEnd} chars`);
+
+      setContent(initialContent);
+      setBaseUrl(document.folderPath);
+
+      // Load saved position
       const savedPosition = await getReadingPosition(document.id);
       scrollPositionToRestore.current = savedPosition?.scrollOffset ?? null;
+
+      setIsReady(true);
     } catch (error) {
       console.error('Error loading document:', error);
       setContent('Error loading document');
       setIsReady(true);
     }
   };
+
+  const loadMoreContent = useCallback(async () => {
+    if (isLoadingMoreRef.current) return;
+
+    const fullMarkdown = fullMarkdownRef.current;
+    const currentEnd = currentLoadedEndRef.current;
+
+    // Check if there's more content to load
+    if (currentEnd >= fullMarkdown.length) return;
+
+    // Debounce: only trigger once per 3 seconds
+    const now = Date.now();
+    if (now - lastScrollEventTime.current < 3000) {
+      return;
+    }
+    lastScrollEventTime.current = now;
+
+    isLoadingMoreRef.current = true;
+
+    // Load next chunk
+    const nextEnd = Math.min(currentEnd + CHUNK_SIZE, fullMarkdown.length);
+    const nextChunk = fullMarkdown.substring(currentEnd, nextEnd);
+
+    console.log(`Appending: ${currentEnd} -> ${nextEnd} of ${fullMarkdown.length}`);
+
+    // Append content directly to WebView without recreating it
+    webViewRef.current?.appendContent(nextChunk);
+    currentLoadedEndRef.current = nextEnd;
+
+    setTimeout(() => {
+      isLoadingMoreRef.current = false;
+    }, 500);
+  }, []);
+
+  const loadPreviousContent = useCallback(async () => {
+    // For now, disable loading previous content to simplify
+    // User can scroll back up through already-loaded content
+  }, []);
 
   const handleWebViewLoaded = () => {
     setWebViewLoaded(true);
@@ -510,6 +564,8 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
               onTextSelected={handleTextSelected}
               onImageModalStateChange={handleImageModalStateChange}
               onWebViewLoaded={handleWebViewLoaded}
+              onScrollNearEnd={loadMoreContent}
+              onScrollNearStart={loadPreviousContent}
             />
 
             <TouchableOpacity
