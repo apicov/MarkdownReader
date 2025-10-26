@@ -530,6 +530,8 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
         onScrollNearEnd();
       } else if (data.type === 'scrollNearStart' && onScrollNearStart) {
         onScrollNearStart();
+      } else if (data.type === 'debug') {
+        console.log(`[WebView Debug] ${data.message}`);
       }
     } catch (error) {
       console.error('Error parsing WebView message:', error);
@@ -620,6 +622,7 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
 
   const scrollToHeading = (headingId: string) => {
     if (!webViewReady || !webViewRef.current) {
+      console.log(`scrollToHeading: WebView not ready for ${headingId}`);
       return;
     }
 
@@ -627,9 +630,29 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     if (webView && typeof webView.injectJavaScript === 'function') {
       const script = `
         (function() {
+          // Debug: List all heading IDs in the document
+          const allHeadings = document.querySelectorAll('#content h1, #content h2, #content h3, #content h4, #content h5, #content h6');
+          const headingIds = Array.from(allHeadings).map(h => h.id);
+          console.log('All heading IDs in DOM:', headingIds.slice(0, 10), '... (showing first 10)');
+
           const element = document.getElementById('${headingId}');
           if (element) {
+            console.log('Found element ${headingId}, scrolling to it');
             element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'debug',
+              message: 'Scrolled to ${headingId}'
+            }));
+          } else {
+            console.log('Element ${headingId} NOT FOUND');
+            console.log('Total headings in DOM:', headingIds.length);
+            if (headingIds.length > 0) {
+              console.log('First heading:', headingIds[0], 'Last heading:', headingIds[headingIds.length - 1]);
+            }
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'debug',
+              message: 'Element ${headingId} not found. Have ' + headingIds.length + ' headings from ' + headingIds[0] + ' to ' + headingIds[headingIds.length - 1]
+            }));
           }
         })();
       `;

@@ -86,6 +86,8 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const hasRestoredPosition = useRef<boolean>(false);
   const headingPositionsRef = useRef<Map<string, number>>(new Map());
   const savedChunkIndexRef = useRef<number>(0);
+  const initialContentRef = useRef<string>('');
+  const isTocNavigatingRef = useRef<boolean>(false);
 
   // ============================================================================
   // CHUNK PAGINATION HOOK
@@ -209,23 +211,39 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     } else {
       // Need to load new chunks
       console.log(`TOC: Loading new chunks for ${headingId}`);
+
+      // Disable scroll-based chunk loading during TOC navigation
+      isTocNavigatingRef.current = true;
+
+      // Extract the heading number from the ID (e.g., "heading-647" -> 647)
+      const targetHeadingNumber = parseInt(headingId.replace('heading-', ''), 10);
+
       const newContent = jumpToChunk(targetChunkIndex);
 
       // Calculate the starting heading index for the new content
-      // This helps the WebView assign correct IDs to headings
-      const chunkStart = targetChunkIndex * CHUNK_SIZE;
+      // jumpToChunk loads [targetChunkIndex, targetChunkIndex+1, targetChunkIndex+2]
+      const actualFirstChunk = Math.max(0, targetChunkIndex);
+      const chunkStart = actualFirstChunk * CHUNK_SIZE;
       const textBeforeChunk = fullMarkdown.substring(0, chunkStart);
-      const headingsBeforeChunk = (textBeforeChunk.match(/^#{1,6}\s+/gm) || []).length;
+      // Match full heading line to count correctly
+      const headingsBeforeChunk = (textBeforeChunk.match(/^#{1,6}\s+.+$/gm) || []).length;
 
-      console.log(`TOC: Replacing content, starting heading index: ${headingsBeforeChunk}`);
+      console.log(`TOC: Replacing content, first chunk: ${actualFirstChunk}, heading offset: ${headingsBeforeChunk}`);
+      console.log(`TOC: Target heading ${headingId} (number ${targetHeadingNumber}) at position ${headingPosition}`);
 
       // Use replaceContent to update the WebView with proper heading indices
-      webViewRef.current?.replaceContent(newContent, headingsBeforeChunk, 'middle');
+      // This will assign IDs starting from headingsBeforeChunk
+      webViewRef.current?.replaceContent(newContent, headingsBeforeChunk, 'top');
 
       // Wait for content to render, then scroll
       setTimeout(() => {
-        console.log(`TOC: Attempting scroll to ${headingId}`);
+        console.log(`TOC: Scrolling to ${headingId} (should exist with offset ${headingsBeforeChunk})`);
         webViewRef.current?.scrollToHeading(headingId);
+
+        // Re-enable scroll-based chunk loading after navigation completes
+        setTimeout(() => {
+          isTocNavigatingRef.current = false;
+        }, 500);
       }, SCROLL_RESTORE_DELAY_MS);
     }
   };
@@ -319,6 +337,9 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
    * Load more content when scrolling near bottom
    */
   const handleScrollNearEnd = () => {
+    // Don't load during TOC navigation
+    if (isTocNavigatingRef.current) return;
+
     const newChunk = loadMoreContent();
     if (newChunk) {
       webViewRef.current?.appendContent(newChunk);
@@ -329,6 +350,9 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
    * Load previous content when scrolling near top
    */
   const handleScrollNearStart = () => {
+    // Don't load during TOC navigation
+    if (isTocNavigatingRef.current) return;
+
     const newChunk = loadPreviousContent();
     if (newChunk) {
       webViewRef.current?.prependContent(newChunk);
@@ -372,8 +396,10 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
 
   // Load initial chunks when fullMarkdown is set
   useEffect(() => {
-    if (fullMarkdown && fullMarkdown.length > 0) {
-      loadInitialChunks(savedChunkIndexRef.current, 3);
+    if (fullMarkdown && fullMarkdown.length > 0 && !isReady) {
+      const initialContent = loadInitialChunks(savedChunkIndexRef.current, 3);
+      // Set the initial content in a ref so we don't trigger WebView recreation
+      initialContentRef.current = initialContent;
       setIsReady(true);
       console.log(`Loaded chunks starting at ${savedChunkIndexRef.current}, total ${totalChunks} chunks`);
     }
@@ -459,7 +485,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
           {/* WebView */}
           <WebViewMarkdownReader
             ref={webViewRef}
-            markdown={currentContent}
+            markdown={initialContentRef.current}
             fontSize={fontSize}
             baseUrl={baseUrl}
             onTextSelected={handleTextSelected}
