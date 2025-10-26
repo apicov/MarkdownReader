@@ -14,8 +14,7 @@ import {useTheme} from '../contexts/ThemeContext';
 import {useSettings} from '../contexts/SettingsContext';
 import {Document} from '../types';
 import {getDocuments, findMarkdownInFolder} from '../utils/documentService';
-
-const DOCUMENTS_CACHE_KEY = '@documents_cache';
+import {STORAGE_KEY_DOCUMENTS_CACHE} from '../constants';
 
 interface DocumentListScreenProps {
   onDocumentSelect: (doc: Document) => void;
@@ -48,7 +47,7 @@ export const DocumentListScreen: React.FC<DocumentListScreenProps> = ({
 
   const loadCachedDocuments = async () => {
     try {
-      const cached = await AsyncStorage.getItem(DOCUMENTS_CACHE_KEY);
+      const cached = await AsyncStorage.getItem(STORAGE_KEY_DOCUMENTS_CACHE);
       if (cached) {
         setDocuments(JSON.parse(cached));
       }
@@ -64,8 +63,8 @@ export const DocumentListScreen: React.FC<DocumentListScreenProps> = ({
     try {
       const docs = await getDocuments(settings.docsPath);
       setDocuments(docs);
-      // Save to cache
-      await AsyncStorage.setItem(DOCUMENTS_CACHE_KEY, JSON.stringify(docs));
+      // Cache the document list for faster loading on next app launch
+      await AsyncStorage.setItem(STORAGE_KEY_DOCUMENTS_CACHE, JSON.stringify(docs));
     } catch (error) {
       console.error('Error loading documents:', error);
     }
@@ -256,23 +255,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     opacity: 0.7,
     textAlign: 'center',
-  },
-  debugText: {
-    fontSize: 12,
-    opacity: 0.7,
-    textAlign: 'left',
-    marginTop: 16,
-    fontFamily: 'monospace',
-  },
-  setupButton: {
-    marginTop: 24,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  setupButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
   },
 });

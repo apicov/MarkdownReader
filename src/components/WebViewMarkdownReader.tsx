@@ -3,6 +3,7 @@ import {View, StyleSheet, ActivityIndicator} from 'react-native';
 import WebView from 'react-native-webview';
 import {useTheme} from '../contexts/ThemeContext';
 import {File, Directory, Paths} from 'expo-file-system';
+import {IMAGE_CLICK_LISTENER_SCRIPT, getImageClickListenerScript} from '../utils/webViewHelpers';
 
 interface WebViewMarkdownReaderProps {
   markdown: string;
@@ -220,22 +221,7 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     // Add click listeners to all images
     function setupImageListeners() {
       document.querySelectorAll('#content img').forEach(img => {
-        img.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          modalImage.src = img.src;
-          modal.classList.add('active');
-          document.body.classList.add('modal-open');
-          window.currentScale = 1;
-          window.currentX = 0;
-          window.currentY = 0;
-          updateModalImageTransform();
-          // Notify React Native that image modal is open
-          window.ReactNativeWebView.postMessage(JSON.stringify({
-            type: 'imageModalStateChanged',
-            isOpen: true
-          }));
-        });
+        ${IMAGE_CLICK_LISTENER_SCRIPT}
       });
     }
 
@@ -492,26 +478,7 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
                   if (img) {
                     img.src = ${JSON.stringify(dataUri)};
                     // Add click listener for image expansion
-                    img.addEventListener('click', (e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      const modal = document.getElementById('imageModal');
-                      const modalImage = document.getElementById('modalImage');
-                      modalImage.src = img.src;
-                      modal.classList.add('active');
-                      document.body.classList.add('modal-open');
-                      window.currentScale = 1;
-                      window.currentX = 0;
-                      window.currentY = 0;
-                      if (window.updateModalImageTransform) {
-                        window.updateModalImageTransform();
-                      }
-                      // Notify React Native that image modal is open
-                      window.ReactNativeWebView.postMessage(JSON.stringify({
-                        type: 'imageModalStateChanged',
-                        isOpen: true
-                      }));
-                    });
+                    ${IMAGE_CLICK_LISTENER_SCRIPT}
                   }
                 })();
               `;
@@ -729,25 +696,7 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
           // Add click listeners to new images
           const newImages = tempDiv.querySelectorAll('img');
           newImages.forEach(img => {
-            img.addEventListener('click', (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const modal = document.getElementById('imageModal');
-              const modalImage = document.getElementById('modalImage');
-              modalImage.src = img.src;
-              modal.classList.add('active');
-              document.body.classList.add('modal-open');
-              window.currentScale = 1;
-              window.currentX = 0;
-              window.currentY = 0;
-              if (window.updateModalImageTransform) {
-                window.updateModalImageTransform();
-              }
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'imageModalStateChanged',
-                isOpen: true
-              }));
-            });
+            ${IMAGE_CLICK_LISTENER_SCRIPT}
           });
 
           contentDiv.appendChild(tempDiv);
@@ -831,25 +780,7 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
           // Add click listeners to new images
           const newImages = tempDiv.querySelectorAll('img');
           newImages.forEach(img => {
-            img.addEventListener('click', (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const modal = document.getElementById('imageModal');
-              const modalImage = document.getElementById('modalImage');
-              modalImage.src = img.src;
-              modal.classList.add('active');
-              document.body.classList.add('modal-open');
-              window.currentScale = 1;
-              window.currentX = 0;
-              window.currentY = 0;
-              if (window.updateModalImageTransform) {
-                window.updateModalImageTransform();
-              }
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'imageModalStateChanged',
-                isOpen: true
-              }));
-            });
+            ${IMAGE_CLICK_LISTENER_SCRIPT}
           });
 
           // Insert at the beginning
@@ -933,25 +864,7 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
           // Add click listeners to images
           const images = contentDiv.querySelectorAll('img');
           images.forEach(img => {
-            img.addEventListener('click', (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const modal = document.getElementById('imageModal');
-              const modalImage = document.getElementById('modalImage');
-              modalImage.src = img.src;
-              modal.classList.add('active');
-              document.body.classList.add('modal-open');
-              window.currentScale = 1;
-              window.currentX = 0;
-              window.currentY = 0;
-              if (window.updateModalImageTransform) {
-                window.updateModalImageTransform();
-              }
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'imageModalStateChanged',
-                isOpen: true
-              }));
-            });
+            ${IMAGE_CLICK_LISTENER_SCRIPT}
           });
 
           // Calculate new scroll position based on behavior

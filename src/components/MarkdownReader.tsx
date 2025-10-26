@@ -1,14 +1,26 @@
-import React, {useEffect, useState, useRef, useCallback} from 'react';
+/**
+ * Markdown Reader Component (Refactored)
+ *
+ * Main orchestrator for the markdown reading experience.
+ * Coordinates between chunked document loading, TOC navigation, translation,
+ * and scroll position management.
+ *
+ * This component focuses on high-level orchestration, delegating:
+ * - Document chunking to useChunkPagination hook
+ * - Translation to useTranslation hook
+ * - TOC extraction to tocService
+ * - UI modals to separate components
+ */
+
+import React, {useEffect, useState, useRef} from 'react';
 import {
   View,
   StyleSheet,
   TouchableOpacity,
-  Modal,
   Text,
   ActivityIndicator,
   BackHandler,
   Alert,
-  ScrollView,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../contexts/ThemeContext';
@@ -17,162 +29,128 @@ import {Document} from '../types';
 import {readMarkdownFile} from '../utils/documentService';
 import {WebViewMarkdownReader, WebViewMarkdownReaderRef} from './WebViewMarkdownReader';
 import {saveReadingPosition, getReadingPosition} from '../utils/readingPositionService';
-
-interface TocItem {
-  level: number;
-  text: string;
-  id: string;
-  hasChildren?: boolean;
-}
+import {extractTableOfContents, TocItem, getHeadingPositions} from '../utils/tocService';
+import {useChunkPagination} from '../hooks/useChunkPagination';
+import {useTranslation} from '../hooks/useTranslation';
+import {TranslationModal} from './TranslationModal';
+import {TableOfContentsModal} from './TableOfContentsModal';
+import {FontSizeModal} from './FontSizeModal';
+import {
+  AUTO_SAVE_INTERVAL_MS,
+  SCROLL_RESTORE_DELAY_MS,
+  CHUNK_SIZE,
+} from '../constants';
 
 interface MarkdownReaderProps {
   document: Document;
   onBack: () => void;
 }
 
-interface ImageRendererProps {
-  src: string;
-  fileMap: Map<string, string>;
-  style: any;
-  onPress: (uri: string) => void;
-}
-
-const ImageRenderer: React.FC<ImageRendererProps> = ({src, fileMap, style, onPress}) => {
-  const [imageUri, setImageUri] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string>('');
-
-  useEffect(() => {
-    if (src.startsWith('http')) {
-      setImageUri(src);
-      return;
-    }
-
-    // Get the image filename from src
-    const imageName = src.replace(/^\/+/, '');
-
-    // Look up in the pre-built file map - instant O(1) lookup!
-    const uri = fileMap.get(imageName);
-
-    if (!uri) {
-      setErrorMsg(`Image not found: ${imageName}`);
-      return;
-    }
-
-    setImageUri(uri);
-  }, [src, fileMap]);
-
-  if (errorMsg || !imageUri) {
-    return (
-      <View style={{padding: 10, backgroundColor: '#ffcccc', borderRadius: 5, marginVertical: 5}}>
-        <Text style={{color: '#cc0000', fontSize: 10}}>{errorMsg || `Failed: ${src}`}</Text>
-      </View>
-    );
-  }
-
-  return (
-    <TouchableOpacity onPress={() => onPress(imageUri)}>
-      <Image
-        source={{uri: imageUri}}
-        style={[style, {width: 300, height: 200}]}
-        resizeMode="contain"
-      />
-    </TouchableOpacity>
-  );
-};
-
+/**
+ * Main markdown reader component
+ *
+ * Handles document loading, chunked pagination, navigation, and user interactions.
+ */
 export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   document,
   onBack,
 }) => {
+  // ============================================================================
+  // CONTEXTS & HOOKS
+  // ============================================================================
+
   const {theme, isDarkMode, toggleTheme} = useTheme();
   const {settings, updateSettings} = useSettings();
-  const [content, setContent] = useState('');
+  const {translate, state: translationState, clearTranslation} = useTranslation();
+
+  // ============================================================================
+  // STATE
+  // ============================================================================
+
   const [fontSize, setFontSize] = useState(settings.fontSize);
-  const [translationModal, setTranslationModal] = useState({
-    visible: false,
-    translation: '',
-    loading: false,
-  });
   const [fontSizeModalVisible, setFontSizeModalVisible] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [baseUrl, setBaseUrl] = useState('');
   const [isImageExpanded, setIsImageExpanded] = useState(false);
+  const [tocItems, setTocItems] = useState<TocItem[]>([]);
+  const [tocModalVisible, setTocModalVisible] = useState(false);
+  const [fullMarkdown, setFullMarkdown] = useState('');
+
+  // ============================================================================
+  // REFS
+  // ============================================================================
+
   const webViewRef = useRef<WebViewMarkdownReaderRef>(null);
   const [webViewLoaded, setWebViewLoaded] = useState(false);
   const scrollPositionToRestore = useRef<number | null>(null);
   const hasRestoredPosition = useRef<boolean>(false);
-  const [tocItems, setTocItems] = useState<TocItem[]>([]);
-  const [tocModalVisible, setTocModalVisible] = useState(false);
-  const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
-  const fullMarkdownRef = useRef<string>('');
-  const firstLoadedChunkRef = useRef<number>(0); // First chunk currently loaded
-  const lastLoadedChunkRef = useRef<number>(0);  // Last chunk currently loaded
-  const totalChunksRef = useRef<number>(0);
-  const isLoadingMoreRef = useRef<boolean>(false);
-  const lastScrollEventTime = useRef<number>(0);
-  const CHUNK_SIZE = 25000; // 25KB chunks for better memory efficiency
+  const headingPositionsRef = useRef<Map<string, number>>(new Map());
+  const savedChunkIndexRef = useRef<number>(0);
 
-  const scrollPage = (direction: 'up' | 'down') => {
-    webViewRef.current?.scrollPage(direction);
-  };
+  // ============================================================================
+  // CHUNK PAGINATION HOOK
+  // ============================================================================
 
-  // Get chunk content by index
-  const getChunkContent = (chunkIndex: number): string => {
-    const fullMarkdown = fullMarkdownRef.current;
-    const start = chunkIndex * CHUNK_SIZE;
-    const end = Math.min(start + CHUNK_SIZE, fullMarkdown.length);
-    return fullMarkdown.substring(start, end);
-  };
+  const {
+    currentContent,
+    firstLoadedChunk,
+    lastLoadedChunk,
+    totalChunks,
+    loadInitialChunks,
+    loadMoreContent,
+    loadPreviousContent,
+    jumpToChunk,
+    getChunkForPosition,
+    isChunkLoaded,
+  } = useChunkPagination(fullMarkdown);
 
-  // Get 3-chunk window content (prev, current, next)
-  const getWindowContent = (centerChunkIndex: number): string => {
-    const totalChunks = totalChunksRef.current;
-    let content = '';
+  // ============================================================================
+  // SCROLL POSITION MANAGEMENT
+  // ============================================================================
 
-    // Load previous chunk if exists
-    if (centerChunkIndex > 0) {
-      content += getChunkContent(centerChunkIndex - 1);
-    }
-
-    // Load current chunk
-    content += getChunkContent(centerChunkIndex);
-
-    // Load next chunk if exists
-    if (centerChunkIndex < totalChunks - 1) {
-      content += getChunkContent(centerChunkIndex + 1);
-    }
-
-    return content;
-  };
-
-  // Count headings up to a character position
-  const countHeadingsUpToPosition = (position: number): number => {
-    const fullMarkdown = fullMarkdownRef.current;
-    const textBeforePosition = fullMarkdown.substring(0, position);
-    const headingRegex = /^#{1,6}\s+.+$/gm;
-    const matches = textBeforePosition.match(headingRegex);
-    return matches ? matches.length : 0;
-  };
-
+  /**
+   * Save current reading position to persistent storage
+   */
   const saveCurrentPosition = async () => {
     try {
       const scrollPosition = await webViewRef.current?.getScrollPosition();
-      const firstChunk = firstLoadedChunkRef.current;
       if (scrollPosition !== undefined && scrollPosition >= 0) {
-        await saveReadingPosition(document.id, scrollPosition, firstChunk);
+        await saveReadingPosition(document.id, scrollPosition, firstLoadedChunk);
       }
     } catch (error) {
       console.error('Failed to save reading position:', error);
     }
   };
 
+  /**
+   * Restore scroll position after WebView loads
+   */
+  const restoreScrollPosition = () => {
+    if (!hasRestoredPosition.current && scrollPositionToRestore.current !== null && scrollPositionToRestore.current > 0) {
+      hasRestoredPosition.current = true;
+      setTimeout(() => {
+        const posToRestore = scrollPositionToRestore.current;
+        if (posToRestore !== null && posToRestore > 0) {
+          webViewRef.current?.scrollToPosition(posToRestore);
+        }
+      }, SCROLL_RESTORE_DELAY_MS);
+    }
+  };
+
+  // ============================================================================
+  // NAVIGATION HANDLERS
+  // ============================================================================
+
+  /**
+   * Handle back button - save position and exit
+   */
   const handleBack = async () => {
     // If image is expanded, close it instead of going back
     if (isImageExpanded && webViewRef.current?.closeImageModal()) {
       return;
     }
 
-    // Show confirmation dialog before going back
+    // Show confirmation dialog
     Alert.alert(
       'Close Document',
       'Do you want to close this document?',
@@ -194,27 +172,193 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     );
   };
 
-  // Handle Android back button
-  useEffect(() => {
-    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      handleBack();
-      return true; // Prevent default behavior
-    });
+  /**
+   * Scroll by one page height
+   */
+  const scrollPage = (direction: 'up' | 'down') => {
+    webViewRef.current?.scrollPage(direction);
+  };
 
-    return () => backHandler.remove();
-  }, [isImageExpanded, onBack]);
+  // ============================================================================
+  // TOC NAVIGATION
+  // ============================================================================
 
-  // Periodic auto-save of scroll position
-  useEffect(() => {
-    if (!isReady || !webViewLoaded) return;
+  /**
+   * Handle TOC item selection - jump to heading
+   */
+  const handleTocItemPress = async (headingId: string) => {
+    setTocModalVisible(false);
 
-    const saveInterval = setInterval(async () => {
-      await saveCurrentPosition();
-    }, 3000); // Auto-save every 3 seconds
+    // Get heading position in full document
+    const headingPosition = headingPositionsRef.current.get(headingId);
+    if (headingPosition === undefined) {
+      console.log(`TOC: Heading ${headingId} not found in positions map`);
+      return;
+    }
 
-    return () => clearInterval(saveInterval);
-  }, [document.id, isReady, webViewLoaded]);
+    // Calculate which chunk contains this heading
+    const targetChunkIndex = getChunkForPosition(headingPosition);
+    const isLoaded = isChunkLoaded(targetChunkIndex);
 
+    console.log(`TOC: Navigating to ${headingId} at position ${headingPosition}, chunk ${targetChunkIndex}, isLoaded: ${isLoaded}`);
+
+    if (isLoaded) {
+      // Heading is already in memory, just scroll
+      console.log(`TOC: Scrolling to ${headingId} (already loaded)`);
+      webViewRef.current?.scrollToHeading(headingId);
+    } else {
+      // Need to load new chunks
+      console.log(`TOC: Loading new chunks for ${headingId}`);
+      const newContent = jumpToChunk(targetChunkIndex);
+
+      // Calculate the starting heading index for the new content
+      // This helps the WebView assign correct IDs to headings
+      const chunkStart = targetChunkIndex * CHUNK_SIZE;
+      const textBeforeChunk = fullMarkdown.substring(0, chunkStart);
+      const headingsBeforeChunk = (textBeforeChunk.match(/^#{1,6}\s+/gm) || []).length;
+
+      console.log(`TOC: Replacing content, starting heading index: ${headingsBeforeChunk}`);
+
+      // Use replaceContent to update the WebView with proper heading indices
+      webViewRef.current?.replaceContent(newContent, headingsBeforeChunk, 'middle');
+
+      // Wait for content to render, then scroll
+      setTimeout(() => {
+        console.log(`TOC: Attempting scroll to ${headingId}`);
+        webViewRef.current?.scrollToHeading(headingId);
+      }, SCROLL_RESTORE_DELAY_MS);
+    }
+  };
+
+  // ============================================================================
+  // TRANSLATION
+  // ============================================================================
+
+  /**
+   * Handle text selection from WebView
+   */
+  const handleTextSelected = async (text: string) => {
+    const result = await translate(text);
+    // Translation state is managed by the hook and displayed by TranslationModal
+  };
+
+  /**
+   * Close translation modal
+   */
+  const handleCloseTranslation = () => {
+    clearTranslation();
+  };
+
+  // ============================================================================
+  // FONT SIZE
+  // ============================================================================
+
+  /**
+   * Handle font size change from modal
+   */
+  const handleFontSizeChange = (newSize: number) => {
+    setFontSize(newSize);
+    updateSettings({fontSize: newSize});
+  };
+
+  // ============================================================================
+  // DOCUMENT LOADING
+  // ============================================================================
+
+  /**
+   * Load markdown document and initialize
+   */
+  const loadDocument = async () => {
+    setIsReady(false);
+    setWebViewLoaded(false);
+    hasRestoredPosition.current = false;
+
+    try {
+      // Read full markdown content
+      const markdown = await readMarkdownFile(document.markdownFile);
+
+      // Extract table of contents
+      const toc = extractTableOfContents(markdown);
+      setTocItems(toc);
+
+      // Get heading positions for navigation
+      const positions = getHeadingPositions(markdown);
+      headingPositionsRef.current = positions;
+
+      // Load saved reading position
+      const savedPosition = await getReadingPosition(document.id);
+      const savedChunkIndex = savedPosition?.chunkIndex ?? 0;
+      const savedScrollOffset = savedPosition?.scrollOffset ?? 0;
+
+      // Store scroll position to restore
+      scrollPositionToRestore.current = savedScrollOffset;
+
+      // Set base URL for images
+      setBaseUrl(document.folderPath);
+
+      // Set full markdown - this will trigger useChunkPagination to recalculate
+      setFullMarkdown(markdown);
+
+      // Store the chunk index we want to start from
+      // We'll load chunks in an effect when fullMarkdown changes
+      savedChunkIndexRef.current = savedChunkIndex;
+
+      console.log(`Document loaded: ${markdown.length} chars`);
+    } catch (error) {
+      console.error('Error loading document:', error);
+      Alert.alert('Error', 'Failed to load document');
+      setIsReady(true);
+    }
+  };
+
+  // ============================================================================
+  // CHUNK LOADING CALLBACKS
+  // ============================================================================
+
+  /**
+   * Load more content when scrolling near bottom
+   */
+  const handleScrollNearEnd = () => {
+    const newChunk = loadMoreContent();
+    if (newChunk) {
+      webViewRef.current?.appendContent(newChunk);
+    }
+  };
+
+  /**
+   * Load previous content when scrolling near top
+   */
+  const handleScrollNearStart = () => {
+    const newChunk = loadPreviousContent();
+    if (newChunk) {
+      webViewRef.current?.prependContent(newChunk);
+    }
+  };
+
+  // ============================================================================
+  // WEBVIEW CALLBACKS
+  // ============================================================================
+
+  /**
+   * Handle WebView load complete
+   */
+  const handleWebViewLoaded = () => {
+    setWebViewLoaded(true);
+    restoreScrollPosition();
+  };
+
+  /**
+   * Handle image modal state changes
+   */
+  const handleImageModalStateChange = (isOpen: boolean) => {
+    setIsImageExpanded(isOpen);
+  };
+
+  // ============================================================================
+  // EFFECTS
+  // ============================================================================
+
+  // Load document on mount
   useEffect(() => {
     loadDocument();
 
@@ -226,424 +370,43 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     };
   }, [document.id]);
 
-  const extractTocFromMarkdown = (markdown: string): TocItem[] => {
-    const headingRegex = /^(#{1,6})\s+(.+)$/gm;
-    const toc: TocItem[] = [];
-    let match;
-    let index = 0;
-
-    while ((match = headingRegex.exec(markdown)) !== null) {
-      const level = match[1].length;
-      let text = match[2].trim();
-
-      // Clean up markdown formatting from heading text
-      // Remove bold/italic
-      text = text.replace(/\*\*(.+?)\*\*/g, '$1');  // **bold**
-      text = text.replace(/\*(.+?)\*/g, '$1');      // *italic*
-      text = text.replace(/__(.+?)__/g, '$1');      // __bold__
-      text = text.replace(/_(.+?)_/g, '$1');        // _italic_
-
-      // Remove inline code
-      text = text.replace(/`(.+?)`/g, '$1');        // `code`
-
-      // Remove links but keep text
-      text = text.replace(/\[(.+?)\]\(.+?\)/g, '$1'); // [text](url)
-
-      // Remove HTML tags
-      text = text.replace(/<[^>]+>/g, '');
-
-      // Decode common HTML entities
-      text = text.replace(/&nbsp;/g, ' ');
-      text = text.replace(/&lt;/g, '<');
-      text = text.replace(/&gt;/g, '>');
-      text = text.replace(/&amp;/g, '&');
-      text = text.replace(/&quot;/g, '"');
-
-      const id = `heading-${index++}`;
-      toc.push({ level, text, id });
-    }
-
-    // Mark items that have children
-    for (let i = 0; i < toc.length; i++) {
-      const currentLevel = toc[i].level;
-      // Check if next item is a child (has higher level number = deeper nesting)
-      if (i + 1 < toc.length && toc[i + 1].level > currentLevel) {
-        toc[i].hasChildren = true;
-      }
-    }
-
-    return toc;
-  };
-
-  const loadDocument = async () => {
-    setIsReady(false);
-    setWebViewLoaded(false);
-    hasRestoredPosition.current = false;
-    isLoadingMoreRef.current = false;
-    try {
-      // Read the full markdown to extract TOC (lightweight operation)
-      const fullMarkdown = await readMarkdownFile(document.markdownFile);
-      fullMarkdownRef.current = fullMarkdown;
-
-      // Calculate total chunks
-      const totalChunks = Math.ceil(fullMarkdown.length / CHUNK_SIZE);
-      totalChunksRef.current = totalChunks;
-
-      // Extract TOC from full markdown
-      const toc = extractTocFromMarkdown(fullMarkdown);
-      setTocItems(toc);
-
-      // Load saved position
-      const savedPosition = await getReadingPosition(document.id);
-      const savedChunkIndex = savedPosition?.chunkIndex ?? 0;
-      const savedScrollOffset = savedPosition?.scrollOffset ?? 0;
-
-      // Start at saved chunk (load that chunk + next 2)
-      const startChunkIndex = Math.max(0, Math.min(savedChunkIndex, totalChunks - 1));
-
-      // Load initial 3 chunks starting from saved position
-      const firstChunk = startChunkIndex;
-      const lastChunk = Math.min(startChunkIndex + 2, totalChunks - 1);
-
-      firstLoadedChunkRef.current = firstChunk;
-      lastLoadedChunkRef.current = lastChunk;
-
-      let initialContent = '';
-      for (let i = firstChunk; i <= lastChunk; i++) {
-        initialContent += getChunkContent(i);
-      }
-
-      console.log(`Document: ${fullMarkdown.length} chars in ${totalChunks} chunks`);
-      console.log(`Loading chunks [${firstChunk}, ${lastChunk}]`);
-
-      setContent(initialContent);
-      setBaseUrl(document.folderPath);
-      scrollPositionToRestore.current = savedScrollOffset;
-
+  // Load initial chunks when fullMarkdown is set
+  useEffect(() => {
+    if (fullMarkdown && fullMarkdown.length > 0) {
+      loadInitialChunks(savedChunkIndexRef.current, 3);
       setIsReady(true);
-    } catch (error) {
-      console.error('Error loading document:', error);
-      setContent('Error loading document');
-      setIsReady(true);
+      console.log(`Loaded chunks starting at ${savedChunkIndexRef.current}, total ${totalChunks} chunks`);
     }
-  };
+  }, [fullMarkdown]);
 
-  const loadMoreContent = useCallback(async () => {
-    if (isLoadingMoreRef.current) {
-      console.log('loadMoreContent: Already loading, skipping');
-      return;
-    }
+  // Auto-save position periodically
+  useEffect(() => {
+    if (!isReady || !webViewLoaded) return;
 
-    const lastChunk = lastLoadedChunkRef.current;
-    const totalChunks = totalChunksRef.current;
+    const saveInterval = setInterval(async () => {
+      await saveCurrentPosition();
+    }, AUTO_SAVE_INTERVAL_MS);
 
-    console.log(`loadMoreContent triggered: currently loaded [${firstLoadedChunkRef.current}, ${lastChunk}]`);
+    return () => clearInterval(saveInterval);
+  }, [document.id, isReady, webViewLoaded]);
 
-    // Check if there's a next chunk to load
-    const nextChunk = lastChunk + 1;
-    if (nextChunk >= totalChunks) {
-      console.log(`loadMoreContent: Already at last chunk ${lastChunk}`);
-      return;
-    }
+  // Handle Android back button
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleBack();
+      return true; // Prevent default behavior
+    });
 
-    // Debounce
-    const now = Date.now();
-    if (now - lastScrollEventTime.current < 2000) {
-      console.log('loadMoreContent: Debouncing, too soon');
-      return;
-    }
-    lastScrollEventTime.current = now;
+    return () => backHandler.remove();
+  }, [isImageExpanded, onBack]);
 
-    isLoadingMoreRef.current = true;
-
-    // Simply append the next chunk
-    const chunkContent = getChunkContent(nextChunk);
-    console.log(`✓ Appending chunk ${nextChunk} (${chunkContent.length} chars)`);
-
-    webViewRef.current?.appendContent(chunkContent);
-    lastLoadedChunkRef.current = nextChunk;
-
-    setTimeout(() => {
-      isLoadingMoreRef.current = false;
-    }, 500);
-  }, []);
-
-  const loadPreviousContent = useCallback(async () => {
-    if (isLoadingMoreRef.current) {
-      console.log('loadPreviousContent: Already loading, skipping');
-      return;
-    }
-
-    const firstChunk = firstLoadedChunkRef.current;
-
-    console.log(`loadPreviousContent triggered: currently loaded [${firstChunk}, ${lastLoadedChunkRef.current}]`);
-
-    // Check if there's a previous chunk to load
-    const prevChunk = firstChunk - 1;
-    if (prevChunk < 0) {
-      console.log(`loadPreviousContent: Already at first chunk 0`);
-      return;
-    }
-
-    // Debounce
-    const now = Date.now();
-    if (now - lastScrollEventTime.current < 2000) {
-      console.log('loadPreviousContent: Debouncing, too soon');
-      return;
-    }
-    lastScrollEventTime.current = now;
-
-    isLoadingMoreRef.current = true;
-
-    // Simply prepend the previous chunk
-    const chunkContent = getChunkContent(prevChunk);
-    console.log(`✓ Prepending chunk ${prevChunk} (${chunkContent.length} chars)`);
-
-    webViewRef.current?.prependContent(chunkContent);
-    firstLoadedChunkRef.current = prevChunk;
-
-    setTimeout(() => {
-      isLoadingMoreRef.current = false;
-    }, 500);
-  }, []);
-
-  const handleWebViewLoaded = () => {
-    setWebViewLoaded(true);
-
-    // Restore scroll position now that WebView is fully loaded
-    if (!hasRestoredPosition.current && scrollPositionToRestore.current !== null && scrollPositionToRestore.current > 0) {
-      hasRestoredPosition.current = true;
-      setTimeout(() => {
-        const posToRestore = scrollPositionToRestore.current;
-        if (posToRestore !== null && posToRestore > 0) {
-          webViewRef.current?.scrollToPosition(posToRestore);
-        }
-      }, 800);
-    }
-  };
-
-  const handleImageModalStateChange = (isOpen: boolean) => {
-    setIsImageExpanded(isOpen);
-  };
-
-  const handleTocItemPress = async (headingId: string) => {
-    setTocModalVisible(false);
-
-    // Extract heading index from ID (e.g., "heading-5" -> 5)
-    const headingIndex = parseInt(headingId.split('-')[1], 10);
-
-    console.log(`TOC: Clicking heading ${headingId}, index ${headingIndex}`);
-
-    // Find the heading in the full markdown
-    const fullMarkdown = fullMarkdownRef.current;
-    const headingRegex = /^#{1,6}\s+.+$/gm;
-    const matches = [...fullMarkdown.matchAll(headingRegex)];
-
-    if (headingIndex >= matches.length) {
-      console.log(`TOC: Heading index ${headingIndex} out of range (${matches.length} headings)`);
-      return;
-    }
-
-    const headingMatch = matches[headingIndex];
-    const headingPosition = headingMatch.index ?? 0;
-
-    // Find which chunk contains this heading
-    const targetChunkIndex = Math.floor(headingPosition / CHUNK_SIZE);
-    const firstLoaded = firstLoadedChunkRef.current;
-    const lastLoaded = lastLoadedChunkRef.current;
-
-    console.log(`TOC: Heading at pos ${headingPosition}, chunk ${targetChunkIndex}, loaded [${firstLoaded}, ${lastLoaded}]`);
-
-    // Check if heading is already loaded
-    if (targetChunkIndex >= firstLoaded && targetChunkIndex <= lastLoaded) {
-      // Heading is already loaded, just scroll to it
-      console.log(`TOC: Heading already loaded, scrolling to ${headingId}`);
-      webViewRef.current?.scrollToHeading(headingId);
-    } else {
-      // Need to load chunks up to target - use replaceContent for big jumps
-      console.log(`TOC: Loading new content starting from chunk ${targetChunkIndex}`);
-
-      const newFirst = targetChunkIndex;
-      const newLast = Math.min(targetChunkIndex + 2, totalChunksRef.current - 1);
-
-      let newContent = '';
-      for (let i = newFirst; i <= newLast; i++) {
-        newContent += getChunkContent(i);
-      }
-
-      firstLoadedChunkRef.current = newFirst;
-      lastLoadedChunkRef.current = newLast;
-
-      webViewRef.current?.replaceContent(newContent, 0);
-
-      // Wait for content to render before scrolling
-      setTimeout(() => {
-        console.log(`TOC: Now scrolling to ${headingId}`);
-        webViewRef.current?.scrollToHeading(headingId);
-      }, 800);
-    }
-  };
-
-  const toggleTocItem = (index: number) => {
-    const newExpanded = new Set(expandedItems);
-    if (newExpanded.has(index)) {
-      newExpanded.delete(index);
-    } else {
-      newExpanded.add(index);
-    }
-    setExpandedItems(newExpanded);
-  };
-
-  const shouldShowTocItem = (index: number): boolean => {
-    if (index === 0) return true;
-
-    const currentLevel = tocItems[index].level;
-
-    // Find the parent (previous item with lower level)
-    for (let i = index - 1; i >= 0; i--) {
-      if (tocItems[i].level < currentLevel) {
-        // Found parent, check if it's expanded
-        return expandedItems.has(i) && shouldShowTocItem(i);
-      }
-    }
-
-    // No parent found (top level item)
-    return true;
-  };
-
-  const handleTextSelected = async (text: string) => {
-    // Check if translation is enabled in settings
-    if (!settings.translationEnabled) {
-      return;
-    }
-
-    // Validate configuration before making the request
-    if (!settings.llmApiUrl) {
-      Alert.alert(
-        'Translation Error',
-        'API URL is not configured. Please set it in Settings.',
-        [{text: 'OK'}]
-      );
-      return;
-    }
-
-    if (!settings.llmApiKey) {
-      Alert.alert(
-        'Translation Error',
-        'API Key is not configured. Please set it in Settings.',
-        [{text: 'OK'}]
-      );
-      return;
-    }
-
-    if (!settings.llmModel) {
-      Alert.alert(
-        'Translation Error',
-        'Model is not configured. Please set it in Settings.',
-        [{text: 'OK'}]
-      );
-      return;
-    }
-
-    try {
-      setTranslationModal({
-        visible: true,
-        translation: '',
-        loading: true,
-      });
-
-      const targetLanguage = settings.targetLanguage || 'Spanish';
-      const prompt = `Translate the following text to ${targetLanguage}. If the text is already in ${targetLanguage}, rewrite it in a simpler and more understandable way:\n\n${text}`;
-
-      const response = await fetch(settings.llmApiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${settings.llmApiKey}`,
-        },
-        body: JSON.stringify({
-          model: settings.llmModel,
-          messages: [
-            {
-              role: 'system',
-              content: `You are a helpful translation and simplification assistant. When translating, provide ONLY the translated text without any labels, prefixes, or explanations like "Translation:" or "Traducción:". When the text is already in the target language, rewrite it in simpler, clearer language while preserving the meaning. Return ONLY the final text, nothing else.`,
-            },
-            {
-              role: 'user',
-              content: prompt,
-            },
-          ],
-          temperature: 0.3,
-        }),
-      });
-
-      if (!response.ok) {
-        let errorTitle = 'Translation Error';
-        let errorMessage = '';
-
-        if (response.status === 401) {
-          errorMessage = 'Invalid API Key. Please check your credentials in Settings.';
-        } else if (response.status === 404) {
-          errorMessage = 'Invalid API URL or endpoint not found. Please check the URL in Settings.';
-        } else if (response.status === 429) {
-          errorMessage = 'Rate limit exceeded. Please try again later.';
-        } else if (response.status === 400) {
-          errorMessage = 'Invalid request. Please check your Model name in Settings.';
-        } else if (response.status >= 500) {
-          errorMessage = 'Server error. Please try again later.';
-        } else {
-          errorMessage = `Error ${response.status}: ${response.statusText}`;
-        }
-
-        // Close the loading modal
-        setTranslationModal({
-          visible: false,
-          translation: '',
-          loading: false,
-        });
-
-        // Show alert dialog
-        Alert.alert(errorTitle, errorMessage, [{text: 'OK'}]);
-        return;
-      }
-
-      const data = await response.json();
-      const result = data.choices?.[0]?.message?.content || 'No translation available';
-
-      setTranslationModal({
-        visible: true,
-        translation: result,
-        loading: false,
-      });
-    } catch (error) {
-      console.error('Translation error:', error);
-
-      let errorMessage = '';
-
-      if (error instanceof Error) {
-        if (error.message.includes('Failed to fetch') || error.message.includes('Network request failed')) {
-          errorMessage = 'Network error. Please check your internet connection.';
-        } else {
-          errorMessage = error.message;
-        }
-      } else {
-        errorMessage = 'Unknown error occurred. Please try again.';
-      }
-
-      // Close the loading modal
-      setTranslationModal({
-        visible: false,
-        translation: '',
-        loading: false,
-      });
-
-      // Show alert dialog
-      Alert.alert('Translation Error', errorMessage, [{text: 'OK'}]);
-    }
-  };
+  // ============================================================================
+  // RENDER
+  // ============================================================================
 
   return (
     <View style={[styles.container, {backgroundColor: theme.background}]}>
+      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={handleBack} style={styles.backButton}>
           <Text style={[styles.backButtonText, {color: theme.accent}]}>
@@ -657,199 +420,89 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
         </Text>
         <TouchableOpacity
           onPress={() => setTocModalVisible(true)}
-          style={styles.themeButton}
+          style={styles.headerButton}
           disabled={tocItems.length === 0}>
-          <Text style={[styles.themeButtonText, {color: tocItems.length > 0 ? theme.accent : theme.border}]}>
+          <Text style={[styles.headerButtonText, {color: tocItems.length > 0 ? theme.accent : theme.border}]}>
             ≡
           </Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => setFontSizeModalVisible(true)} style={styles.themeButton}>
-          <Text style={[styles.themeButtonText, {color: theme.accent}]}>
+        <TouchableOpacity onPress={() => setFontSizeModalVisible(true)} style={styles.headerButton}>
+          <Text style={[styles.headerButtonText, {color: theme.accent}]}>
             Aa
           </Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={toggleTheme} style={styles.themeButton}>
-          <Text style={[styles.themeButtonText, {color: theme.accent}]}>
+        <TouchableOpacity onPress={toggleTheme} style={styles.headerButton}>
+          <Text style={[styles.headerButtonText, {color: theme.accent}]}>
             {isDarkMode ? '☀️' : '🌙'}
           </Text>
         </TouchableOpacity>
       </View>
 
-        {!isReady ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={theme.accent} />
-            <Text style={[styles.loadingText, {color: theme.text}]}>
-              Loading document...
-            </Text>
-          </View>
-        ) : (
-          <SafeAreaView edges={['bottom']} style={styles.contentContainer}>
-            <TouchableOpacity
-              style={styles.tapArea}
-              activeOpacity={1}
-              onPress={() => scrollPage('up')}>
-              <View style={styles.tapZone} />
-            </TouchableOpacity>
-
-            <WebViewMarkdownReader
-              ref={webViewRef}
-              markdown={content}
-              fontSize={fontSize}
-              baseUrl={baseUrl}
-              onTextSelected={handleTextSelected}
-              onImageModalStateChange={handleImageModalStateChange}
-              onWebViewLoaded={handleWebViewLoaded}
-              onScrollNearEnd={loadMoreContent}
-              onScrollNearStart={loadPreviousContent}
-            />
-
-            <TouchableOpacity
-              style={styles.tapArea}
-              activeOpacity={1}
-              onPress={() => scrollPage('down')}>
-              <View style={styles.tapZone} />
-            </TouchableOpacity>
-
-            {translationModal.visible && (
-              <View style={styles.translationOverlayAbsolute} pointerEvents="box-none">
-                <SafeAreaView edges={['bottom']} style={styles.translationSafeArea} pointerEvents="box-none">
-                  <View
-                    pointerEvents="auto"
-                    style={[
-                      styles.translationFloating,
-                      {backgroundColor: theme.background, borderColor: theme.border},
-                    ]}>
-                    <TouchableOpacity
-                      style={styles.closeButton}
-                      onPress={() => {
-                        setTranslationModal(prev => ({...prev, visible: false}));
-                      }}>
-                      <Text style={[styles.closeButtonText, {color: theme.text}]}>✕</Text>
-                    </TouchableOpacity>
-                    {translationModal.loading ? (
-                      <ActivityIndicator color={theme.accent} />
-                    ) : (
-                      <Text style={[styles.translationText, {color: theme.text}]}>
-                        {translationModal.translation}
-                      </Text>
-                    )}
-                  </View>
-                </SafeAreaView>
-              </View>
-            )}
-          </SafeAreaView>
-        )}
-
-        <Modal
-          visible={tocModalVisible}
-          transparent
-          animationType="slide"
-          onRequestClose={() => setTocModalVisible(false)}>
+      {/* Content */}
+      {!isReady ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.accent} />
+          <Text style={[styles.loadingText, {color: theme.text}]}>
+            Loading document...
+          </Text>
+        </View>
+      ) : (
+        <SafeAreaView edges={['bottom']} style={styles.contentContainer}>
+          {/* Left tap zone */}
           <TouchableOpacity
-            style={styles.modalOverlay}
+            style={styles.tapArea}
             activeOpacity={1}
-            onPress={() => setTocModalVisible(false)}>
-            <TouchableOpacity
-              activeOpacity={1}
-              onPress={(e) => e.stopPropagation()}
-              style={[
-                styles.tocModal,
-                {backgroundColor: theme.background, borderColor: theme.border},
-              ]}>
-              <View style={styles.tocHeader}>
-                <Text style={[styles.tocTitle, {color: theme.text}]}>Table of Contents</Text>
-                <TouchableOpacity onPress={() => setTocModalVisible(false)}>
-                  <Text style={[styles.closeButtonText, {color: theme.text}]}>✕</Text>
-                </TouchableOpacity>
-              </View>
-              <ScrollView style={styles.tocList}>
-                {tocItems.map((item, index) => {
-                  if (!shouldShowTocItem(index)) return null;
-
-                  const isExpanded = expandedItems.has(index);
-
-                  return (
-                    <View key={index} style={[
-                      styles.tocItem,
-                      {paddingLeft: (item.level - 1) * 16 + 16},
-                    ]}>
-                      <View style={styles.tocItemRow}>
-                        {item.hasChildren && (
-                          <TouchableOpacity
-                            onPress={() => toggleTocItem(index)}
-                            style={styles.tocExpandButton}
-                            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                            <Text style={[styles.tocExpandIcon, {color: theme.accent}]}>
-                              {isExpanded ? '−' : '+'}
-                            </Text>
-                          </TouchableOpacity>
-                        )}
-                        <TouchableOpacity
-                          style={[styles.tocItemTextContainer, !item.hasChildren && styles.tocItemTextContainerNoIcon]}
-                          onPress={() => handleTocItemPress(item.id)}>
-                          <Text
-                            style={[
-                              styles.tocItemText,
-                              {
-                                color: theme.text,
-                                fontSize: Math.max(14, 18 - item.level),
-                                fontWeight: item.level === 1 ? 'bold' : item.level === 2 ? '600' : 'normal',
-                              },
-                            ]}
-                            numberOfLines={2}>
-                            {item.text}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  );
-                })}
-              </ScrollView>
-            </TouchableOpacity>
+            onPress={() => scrollPage('up')}>
+            <View style={styles.tapZone} />
           </TouchableOpacity>
-        </Modal>
 
-        <Modal
-          visible={fontSizeModalVisible}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setFontSizeModalVisible(false)}>
+          {/* WebView */}
+          <WebViewMarkdownReader
+            ref={webViewRef}
+            markdown={currentContent}
+            fontSize={fontSize}
+            baseUrl={baseUrl}
+            onTextSelected={handleTextSelected}
+            onImageModalStateChange={handleImageModalStateChange}
+            onWebViewLoaded={handleWebViewLoaded}
+            onScrollNearEnd={handleScrollNearEnd}
+            onScrollNearStart={handleScrollNearStart}
+          />
+
+          {/* Right tap zone */}
           <TouchableOpacity
-            style={styles.modalOverlay}
+            style={styles.tapArea}
             activeOpacity={1}
-            onPress={() => setFontSizeModalVisible(false)}>
-            <View
-              style={[
-                styles.fontSizeModal,
-                {backgroundColor: theme.background, borderColor: theme.border},
-              ]}>
-              <Text style={[styles.modalLabel, {color: theme.text, marginBottom: 20}]}>
-                Font Size: {fontSize}
-              </Text>
-              <View style={styles.fontSizeButtons}>
-                <TouchableOpacity
-                  style={[styles.fontSizeButton, {backgroundColor: theme.accent}]}
-                  onPress={() => {
-                    const newSize = Math.max(12, fontSize - 2);
-                    setFontSize(newSize);
-                    updateSettings({fontSize: newSize});
-                  }}>
-                  <Text style={styles.fontSizeButtonText}>-</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.fontSizeButton, {backgroundColor: theme.accent}]}
-                  onPress={() => {
-                    const newSize = Math.min(32, fontSize + 2);
-                    setFontSize(newSize);
-                    updateSettings({fontSize: newSize});
-                  }}>
-                  <Text style={styles.fontSizeButtonText}>+</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
+            onPress={() => scrollPage('down')}>
+            <View style={styles.tapZone} />
           </TouchableOpacity>
-        </Modal>
-      </View>
+
+          {/* Translation Modal */}
+          <TranslationModal
+            visible={translationState.translation !== null}
+            translation={translationState.translation}
+            loading={translationState.isTranslating}
+            onClose={handleCloseTranslation}
+          />
+        </SafeAreaView>
+      )}
+
+      {/* Table of Contents Modal */}
+      <TableOfContentsModal
+        visible={tocModalVisible}
+        items={tocItems}
+        onItemPress={handleTocItemPress}
+        onClose={() => setTocModalVisible(false)}
+      />
+
+      {/* Font Size Modal */}
+      <FontSizeModal
+        visible={fontSizeModalVisible}
+        fontSize={fontSize}
+        onFontSizeChange={handleFontSizeChange}
+        onClose={() => setFontSizeModalVisible(false)}
+      />
+    </View>
   );
 };
 
@@ -876,6 +529,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     flex: 1,
   },
+  headerButton: {
+    padding: 8,
+    marginLeft: 8,
+  },
+  headerButtonText: {
+    fontSize: 24,
+  },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -895,141 +555,5 @@ const styles = StyleSheet.create({
   },
   tapZone: {
     flex: 1,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  translationOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  translationOverlayAbsolute: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-  },
-  translationSafeArea: {
-    width: '100%',
-  },
-  translationFloating: {
-    padding: 20,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    borderTopWidth: 1,
-    minHeight: 80,
-    position: 'relative',
-  },
-  closeButton: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
-  },
-  closeButtonText: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    opacity: 0.7,
-  },
-  translationText: {
-    fontSize: 16,
-    lineHeight: 24,
-    paddingRight: 40,
-  },
-  themeButton: {
-    padding: 8,
-    marginLeft: 8,
-  },
-  themeButtonText: {
-    fontSize: 24,
-  },
-  fontSizeModal: {
-    width: '80%',
-    padding: 20,
-    borderRadius: 12,
-    borderWidth: 1,
-    alignItems: 'center',
-  },
-  fontSizeButtons: {
-    flexDirection: 'row',
-    gap: 20,
-  },
-  fontSizeButton: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  fontSizeButtonText: {
-    color: '#FFFFFF',
-    fontSize: 32,
-    fontWeight: 'bold',
-  },
-  tocModal: {
-    width: '85%',
-    maxHeight: '70%',
-    marginTop: 'auto',
-    marginBottom: 'auto',
-    borderRadius: 16,
-    borderWidth: 1,
-    overflow: 'hidden',
-  },
-  tocHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  tocTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  tocList: {
-    maxHeight: '100%',
-  },
-  tocItem: {
-    paddingVertical: 8,
-    paddingRight: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  tocItemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  tocExpandButton: {
-    width: 24,
-    height: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 8,
-  },
-  tocExpandIcon: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  tocItemTextContainer: {
-    flex: 1,
-    paddingVertical: 4,
-  },
-  tocItemTextContainerNoIcon: {
-    marginLeft: 32,
-  },
-  tocItemText: {
-    lineHeight: 20,
-  },
-  modalLabel: {
-    fontSize: 16,
   },
 });

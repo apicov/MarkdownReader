@@ -15,6 +15,12 @@ import {
 import {Directory} from 'expo-file-system';
 import {useTheme} from '../contexts/ThemeContext';
 import {useSettings} from '../contexts/SettingsContext';
+import {
+  parseFontSize,
+  isValidFontSize,
+  getFontSizeErrorMessage,
+  resetFontSize,
+} from '../utils/fontSizeUtils';
 
 interface SettingsScreenProps {
   onBack: () => void;
@@ -44,9 +50,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
   };
 
   const handleSave = async () => {
-    const fontSizeNum = parseInt(fontSize, 10);
-    if (isNaN(fontSizeNum) || fontSizeNum < 10 || fontSizeNum > 32) {
-      Alert.alert('Invalid Font Size', 'Font size must be between 10 and 32');
+    const fontSizeNum = parseFontSize(fontSize);
+
+    if (fontSizeNum === null || !isValidFontSize(fontSizeNum)) {
+      const errorMessage = fontSizeNum === null
+        ? 'Please enter a valid number'
+        : getFontSizeErrorMessage(fontSizeNum);
+      Alert.alert('Invalid Font Size', errorMessage);
       return;
     }
 
@@ -74,8 +84,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
           text: 'Reset',
           style: 'destructive',
           onPress: async () => {
+            const defaultFontSize = resetFontSize();
             setDocsPath('');
-            setFontSize('16');
+            setFontSize(defaultFontSize.toString());
             setLlmApiUrl('');
             setLlmApiKey('');
             setLlmModel('');
@@ -83,7 +94,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({onBack}) => {
             setTranslationEnabled(true);
             await updateSettings({
               docsPath: '',
-              fontSize: 16,
+              fontSize: defaultFontSize,
               llmApiUrl: '',
               llmApiKey: '',
               llmModel: '',

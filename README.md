@@ -1,17 +1,35 @@
-# Markdown Reader (Expo)
+# Markdown Reader
 
-A clean and simple Expo/React Native app for reading markdown documents converted from PDFs using the marker library.
+A powerful, performant Expo/React Native app for reading large markdown documents with advanced features like chunked loading, table of contents navigation, LaTeX rendering, and LLM-powered translation.
 
-## Features
+Perfect for reading technical documentation, converted PDFs, books, and research papers on mobile devices.
 
-✅ **Document Listing** - Browse markdown folders from bundled assets
-✅ **Markdown Rendering** - Beautiful rendering with support for images, code blocks, and formatting
-✅ **Dual Navigation** - Scroll with finger or tap left/right sides for page-like navigation
-✅ **Image Zoom** - Tap any image to view full-screen with pinch-to-zoom
-✅ **Font Resize** - Pinch with two fingers anywhere to adjust font size
-✅ **Reading Position** - Automatically saves and restores your reading position
-✅ **Night Mode** - Black background with red text for comfortable night reading
-✅ **Word Translation** - Long-press any word for LLM-powered translation and explanation
+## ✨ Features
+
+### Core Reading Features
+- 📱 **Cross-Platform** - Works on Android, iOS, and Web
+- 📄 **Large Document Support** - Chunked loading handles multi-MB files efficiently
+- 📚 **Table of Contents** - Collapsible, hierarchical navigation tree
+- 🎯 **Reading Position Memory** - Always return to where you left off
+- 📖 **Dual Navigation** - Scroll with finger or tap edges for page-like navigation
+- 🔍 **Smart Image Handling** - Tap to zoom, pinch to pan in full-screen modal
+
+### Content Rendering
+- ✅ **Rich Markdown** - Full support for formatting, code blocks, tables
+- 🧮 **LaTeX/Math** - Beautiful equation rendering with KaTeX
+- 🎨 **Syntax Highlighting** - Code blocks with proper formatting
+- 🖼️ **Local Images** - Async loading with batching for performance
+
+### Customization
+- 🌙 **Dark Mode** - Black background with red text for night reading
+- 🔤 **Adjustable Font** - Tap "Aa" button or pinch to resize
+- 🎨 **Clean UI** - Minimal interface that gets out of the way
+
+### Advanced Features
+- 🌐 **LLM Translation** - Select text for instant translation/simplification
+- ⚡ **Performance Optimized** - Lazy loading, debouncing, efficient chunking
+- 💾 **Document Cache** - Faster startup with cached document list
+- 📁 **File Picker** - Browse folders or open individual files
 
 ## Quick Start
 
@@ -43,41 +61,55 @@ npm start
 - **Simpler file system** - Uses expo-file-system (cleaner API)
 - **Cross-platform** - Works on Android, iOS, and Web
 
-## Configuration
+## 📖 Usage Guide
 
-### Adding Documents
+### First Time Setup
 
-Documents are loaded from the `assets/docs` folder. Each document should be in its own folder containing:
-- A `.md` markdown file
+1. **Launch the app** - You'll see the document list screen
+2. **Tap the ⚙️ icon** - Go to settings
+3. **Select documents folder** - Use "Pick Folder" to choose where your markdown files are stored
+4. **Return to list** - Tap "← Back" to return to the main screen
+5. **Tap 🔄** - Refresh to load documents from your selected folder
+
+### Reading Documents
+
+- **Open a document** - Tap any item in the list
+- **Navigate** - Scroll with finger, or tap left/right screen edges
+- **Table of Contents** - Tap the ≡ button to see all headings and jump to sections
+- **Adjust font** - Tap the "Aa" button and use +/- buttons
+- **Toggle dark mode** - Tap the 🌙/☀️ icon
+- **View images** - Tap any image for full-screen with pinch-to-zoom
+
+### Translation Feature
+
+1. **Configure in Settings:**
+   - API URL: `https://api.openai.com/v1/chat/completions` (or Groq, etc.)
+   - API Key: Your OpenAI/Groq API key
+   - Model: `gpt-4` or `llama-3.3-70b-versatile`
+   - Target Language: `Spanish`, `French`, etc.
+
+2. **Use:** Select any text to translate
+
+### Adding Your Documents
+
+Documents can be stored anywhere on your device. Each folder should contain:
+- One `.md` markdown file
 - Associated image files (referenced in the markdown)
 
 Example structure:
 ```
-assets/docs/
-├── Book 1/
-│   ├── book.md
+/sdcard/Download/Books/
+├── MyBook1/
+│   ├── chapter1.md
 │   ├── image1.jpg
 │   └── image2.png
-└── Book 2/
-    ├── book.md
-    └── images...
+└── MyBook2/
+    ├── document.md
+    └── diagrams/
+        └── ...
 ```
 
-**Your 3 sample documents are already included!**
-
-### LLM Translation Setup
-
-To enable word translation, edit [src/contexts/SettingsContext.tsx](src/contexts/SettingsContext.tsx#L16):
-
-```typescript
-const defaultSettings: AppSettings = {
-  fontSize: 16,
-  isDarkMode: false,
-  docsPath: 'docs',
-  llmApiUrl: 'https://api.openai.com/v1/chat/completions',
-  llmApiKey: 'your-api-key-here',
-};
-```
+Then point the app to `/sdcard/Download/Books/` in settings.
 
 ## Usage
 
@@ -118,26 +150,45 @@ eas build --platform android
 eas build --platform ios
 ```
 
-## Project Structure
+## 📁 Project Structure
 
 ```
-assets/docs/               # Your markdown documents (bundled with app)
 src/
-├── components/
-│   ├── ImageZoom.tsx          # Full-screen image viewer
-│   └── MarkdownReader.tsx     # Main markdown rendering component
-├── contexts/
-│   ├── SettingsContext.tsx    # App settings and persistence
-│   └── ThemeContext.tsx       # Theme management (light/dark)
-├── screens/
-│   └── DocumentListScreen.tsx # Document browsing screen
-├── types/
-│   └── index.ts              # TypeScript interfaces
-└── utils/
-    ├── documentService.ts     # Expo file system operations
-    ├── llmService.ts         # LLM API integration
-    └── readingPositionService.ts # Reading position persistence
+├── components/                       # React Components
+│   ├── MarkdownReader.tsx            # Main reader orchestrator
+│   ├── WebViewMarkdownReader.tsx     # WebView-based markdown rendering
+│   ├── TranslationModal.tsx          # Translation results display
+│   ├── TableOfContentsModal.tsx      # TOC navigation modal
+│   └── FontSizeModal.tsx             # Font size adjustment UI
+├── screens/                          # Screen-level components
+│   ├── DocumentListScreen.tsx        # Document browser
+│   └── SettingsScreen.tsx            # Settings configuration
+├── contexts/                         # React Context providers
+│   ├── SettingsContext.tsx           # App settings + persistence
+│   └── ThemeContext.tsx              # Theme (light/dark) management
+├── hooks/                            # Custom React hooks
+│   ├── useChunkPagination.ts         # Document chunking logic
+│   └── useTranslation.ts             # Translation API integration
+├── utils/                            # Business logic utilities
+│   ├── documentService.ts            # File system operations
+│   ├── llmService.ts                 # LLM API calls
+│   ├── readingPositionService.ts     # Position persistence
+│   ├── tocService.ts                 # TOC extraction
+│   ├── webViewHelpers.ts             # WebView JavaScript utilities
+│   └── fontSizeUtils.ts              # Font size validation
+├── constants/
+│   └── index.ts                      # App-wide constants
+└── types/
+    └── index.ts                      # TypeScript interfaces
 ```
+
+### Architecture Highlights
+
+- **Modular Design** - Each file has a single, clear responsibility
+- **Custom Hooks** - Business logic separated from UI components
+- **Service Layer** - Pure functions for file operations, API calls, etc.
+- **Type Safety** - Comprehensive TypeScript interfaces throughout
+- **Well Documented** - JSDoc comments on every exported function
 
 ## Technologies
 
@@ -168,6 +219,42 @@ npm start -- --clear
 - Verify image paths in markdown match actual file names
 - Images must be in the same folder as the markdown file
 
-## License
+## 🤝 Contributing
 
-MIT
+Contributions are welcome! This project is designed to be contributor-friendly with:
+
+- **Clean, modular code** - Each file has a single responsibility
+- **Comprehensive comments** - JSDoc documentation on all functions
+- **TypeScript** - Full type safety throughout
+- **Clear structure** - Easy to find and modify features
+
+### How to Contribute
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes with clear commit messages
+4. Add tests if applicable
+5. Submit a pull request
+
+### Development Guidelines
+
+- Follow existing code style and patterns
+- Add JSDoc comments to new functions
+- Keep components under 300 lines
+- Use TypeScript strictly (no `any` types)
+- Test on both Android and iOS if possible
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Built with [Expo](https://expo.dev/)
+- Markdown rendering with [marked.js](https://marked.js.org/)
+- Math rendering with [KaTeX](https://katex.org/)
+- Translation powered by LLM APIs (OpenAI, Groq, etc.)
+
+## 📧 Support
+
+Found a bug or have a feature request? Please [open an issue](../../issues)!
