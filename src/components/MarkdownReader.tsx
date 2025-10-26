@@ -108,10 +108,21 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const currentLoadedEndRef = useRef<number>(0);
   const isLoadingMoreRef = useRef<boolean>(false);
   const lastScrollEventTime = useRef<number>(0);
-  const CHUNK_SIZE = 100000; // Larger chunks to reduce loading frequency
+  const CHUNK_SIZE = 25000; // 25KB chunks for better memory efficiency
 
   const scrollPage = (direction: 'up' | 'down') => {
     webViewRef.current?.scrollPage(direction);
+  };
+
+  const saveCurrentPosition = async () => {
+    try {
+      const scrollPosition = await webViewRef.current?.getScrollPosition();
+      if (scrollPosition !== undefined && scrollPosition >= 0) {
+        await saveReadingPosition(document.id, scrollPosition);
+      }
+    } catch (error) {
+      console.error('Failed to save reading position:', error);
+    }
   };
 
   const handleBack = async () => {
@@ -132,15 +143,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
         {
           text: 'Close',
           onPress: async () => {
-            // Save scroll position when user confirms close
-            try {
-              const scrollPosition = await webViewRef.current?.getScrollPosition();
-              if (scrollPosition !== undefined && scrollPosition >= 0) {
-                await saveReadingPosition(document.id, scrollPosition);
-              }
-            } catch (error) {
-              console.error('Failed to save reading position:', error);
-            }
+            await saveCurrentPosition();
             onBack();
           },
           style: 'destructive',
@@ -165,14 +168,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     if (!isReady || !webViewLoaded) return;
 
     const saveInterval = setInterval(async () => {
-      try {
-        const scrollPosition = await webViewRef.current?.getScrollPosition();
-        if (scrollPosition !== undefined) {
-          await saveReadingPosition(document.id, scrollPosition);
-        }
-      } catch (error) {
-        console.error('Failed to auto-save reading position:', error);
-      }
+      await saveCurrentPosition();
     }, 3000); // Auto-save every 3 seconds
 
     return () => clearInterval(saveInterval);
@@ -182,20 +178,9 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     loadDocument();
 
     // Save position on unmount
-    const currentWebViewRef = webViewRef;
-    const currentDocumentId = document.id;
-
     return () => {
-      // Synchronously get and save position on unmount
       (async () => {
-        try {
-          const scrollPosition = await currentWebViewRef.current?.getScrollPosition();
-          if (scrollPosition !== undefined && scrollPosition > 0) {
-            await saveReadingPosition(currentDocumentId, scrollPosition);
-          }
-        } catch (error) {
-          console.error('Failed to save reading position on unmount:', error);
-        }
+        await saveCurrentPosition();
       })();
     };
   }, [document.id]);
@@ -263,12 +248,12 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
       const toc = extractTocFromMarkdown(fullMarkdown);
       setTocItems(toc);
 
-      // Load initial chunk only
+      // Load only the first chunk initially
       const initialEnd = Math.min(CHUNK_SIZE, fullMarkdown.length);
       const initialContent = fullMarkdown.substring(0, initialEnd);
       currentLoadedEndRef.current = initialEnd;
 
-      console.log(`Document: ${fullMarkdown.length} chars, loading first ${initialEnd} chars`);
+      console.log(`Document: ${fullMarkdown.length} chars, loading first ${initialEnd} chars (${CHUNK_SIZE} chunk size)`);
 
       setContent(initialContent);
       setBaseUrl(document.folderPath);
@@ -294,9 +279,9 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     // Check if there's more content to load
     if (currentEnd >= fullMarkdown.length) return;
 
-    // Debounce: only trigger once per 3 seconds
+    // Debounce: only trigger once per second
     const now = Date.now();
-    if (now - lastScrollEventTime.current < 3000) {
+    if (now - lastScrollEventTime.current < 1000) {
       return;
     }
     lastScrollEventTime.current = now;
@@ -319,24 +304,22 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   }, []);
 
   const loadPreviousContent = useCallback(async () => {
-    // For now, disable loading previous content to simplify
-    // User can scroll back up through already-loaded content
+    // Scrolling back through already-loaded content works fine
+    // No need to load previous chunks
   }, []);
 
   const handleWebViewLoaded = () => {
     setWebViewLoaded(true);
 
     // Restore scroll position now that WebView is fully loaded
-    // Only restore once per document load, and only if position > 0
     if (!hasRestoredPosition.current && scrollPositionToRestore.current !== null && scrollPositionToRestore.current > 0) {
-      hasRestoredPosition.current = true; // Mark as restored immediately to prevent multiple attempts
-      // Small delay to ensure DOM is fully rendered
+      hasRestoredPosition.current = true;
       setTimeout(() => {
         const posToRestore = scrollPositionToRestore.current;
         if (posToRestore !== null && posToRestore > 0) {
           webViewRef.current?.scrollToPosition(posToRestore);
         }
-      }, 800); // Longer delay to ensure WebView is fully ready
+      }, 800);
     }
   };
 
