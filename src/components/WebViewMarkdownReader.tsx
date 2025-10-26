@@ -22,6 +22,8 @@ export interface WebViewMarkdownReaderRef {
   scrollToPosition: (position: number) => void;
   scrollToHeading: (headingId: string) => void;
   appendContent: (additionalMarkdown: string) => void;
+  prependContent: (additionalMarkdown: string) => void;
+  replaceContent: (newMarkdown: string, startHeadingIndex?: number, scrollBehavior?: 'preserve' | 'top' | 'bottom' | 'middle' | 'twothirds') => void;
 }
 
 export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebViewMarkdownReaderProps>(({
@@ -362,6 +364,8 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
 
     // Detect scroll near end or start to trigger loading more content
     let scrollTimeout;
+    let lastScrollTop = 0;
+
     window.addEventListener('scroll', () => {
       clearTimeout(scrollTimeout);
       scrollTimeout = setTimeout(() => {
@@ -369,23 +373,34 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
         const windowHeight = window.innerHeight;
         const documentHeight = document.documentElement.scrollHeight;
 
-        // Trigger when user is within 2 viewports of the bottom
-        const triggerDistance = windowHeight * 2;
-        const distanceFromBottom = documentHeight - (scrollTop + windowHeight);
+        // Determine scroll direction
+        const isScrollingDown = scrollTop > lastScrollTop;
+        lastScrollTop = scrollTop;
 
-        if (distanceFromBottom < triggerDistance) {
+        // Calculate distances
+        const distanceFromBottom = documentHeight - (scrollTop + windowHeight);
+        const distanceFromTop = scrollTop;
+
+        // Calculate scroll percentage through document
+        const scrollPercent = scrollTop / (documentHeight - windowHeight);
+
+        // Very tight trigger - only in the outer 10% to avoid the middle chunk
+        const triggerDistance = windowHeight * 0.2;
+
+        // Only trigger near END if in bottom 10% and scrolling down
+        if (isScrollingDown && scrollPercent > 0.90 && distanceFromBottom < triggerDistance) {
           window.ReactNativeWebView.postMessage(JSON.stringify({
             type: 'scrollNearEnd'
           }));
         }
 
-        // Trigger when user is within 2 viewports of the top
-        if (scrollTop < triggerDistance) {
+        // Only trigger near START if in top 10% and scrolling up
+        if (!isScrollingDown && scrollPercent < 0.10 && distanceFromTop < triggerDistance) {
           window.ReactNativeWebView.postMessage(JSON.stringify({
             type: 'scrollNearStart'
           }));
         }
-      }, 200);
+      }, 300);
     });
 
     // Signal that page is loaded
@@ -747,6 +762,242 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     }
   };
 
+  const prependContent = (additionalMarkdown: string) => {
+    if (!webViewReady || !webViewRef.current) {
+      return;
+    }
+
+    const webView = webViewRef.current as any;
+    if (webView && typeof webView.injectJavaScript === 'function') {
+      // Process images
+      let processedMarkdown = additionalMarkdown;
+      const imagePlaceholders = new Map<string, string>();
+
+      if (baseUrl) {
+        let placeholderIndex = Date.now();
+        processedMarkdown = additionalMarkdown.replace(/!\[([^\]]*)\]\((?!http)([^)]+)\)/g, (match, alt, imagePath) => {
+          const cleanPath = imagePath.trim().replace(/^\.?\//, '');
+          const placeholderId = `img-placeholder-${placeholderIndex++}`;
+          imagePlaceholders.set(cleanPath, placeholderId);
+          return `![${alt}](#${placeholderId})`;
+        });
+      }
+
+      const script = `
+        (function() {
+          const additionalMarkdown = ${JSON.stringify(processedMarkdown)};
+          const additionalHtml = marked.parse(additionalMarkdown);
+
+          // Save current scroll position
+          const oldScrollTop = window.pageYOffset || document.documentElement.scrollTop;
+          const oldDocHeight = document.documentElement.scrollHeight;
+
+          // Get current heading count to continue ID sequence
+          const existingHeadings = document.querySelectorAll('#content h1, #content h2, #content h3, #content h4, #content h5, #content h6');
+          const totalHeadings = existingHeadings.length;
+
+          // Prepend new content
+          const contentDiv = document.getElementById('content');
+          const tempDiv = document.createElement('div');
+          tempDiv.innerHTML = additionalHtml;
+
+          // Render LaTeX in new content
+          if (typeof renderMathInElement !== 'undefined') {
+            renderMathInElement(tempDiv, {
+              delimiters: [
+                {left: '$$', right: '$$', display: true},
+                {left: '$', right: '$', display: false},
+                {left: '\\\\[', right: '\\\\]', display: true},
+                {left: '\\\\(', right: '\\\\)', display: false}
+              ],
+              throwOnError: false,
+              errorColor: '#cc0000',
+              strict: false
+            });
+          }
+
+          // Add IDs to new headings (they come before existing ones, so start from 0)
+          const newHeadings = tempDiv.querySelectorAll('h1, h2, h3, h4, h5, h6');
+          let headingIndex = 0;
+          newHeadings.forEach(heading => {
+            heading.id = 'heading-' + headingIndex++;
+          });
+
+          // Re-number existing headings
+          existingHeadings.forEach(heading => {
+            heading.id = 'heading-' + headingIndex++;
+          });
+
+          // Add click listeners to new images
+          const newImages = tempDiv.querySelectorAll('img');
+          newImages.forEach(img => {
+            img.addEventListener('click', (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const modal = document.getElementById('imageModal');
+              const modalImage = document.getElementById('modalImage');
+              modalImage.src = img.src;
+              modal.classList.add('active');
+              document.body.classList.add('modal-open');
+              window.currentScale = 1;
+              window.currentX = 0;
+              window.currentY = 0;
+              if (window.updateModalImageTransform) {
+                window.updateModalImageTransform();
+              }
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'imageModalStateChanged',
+                isOpen: true
+              }));
+            });
+          });
+
+          // Insert at the beginning
+          contentDiv.insertBefore(tempDiv, contentDiv.firstChild);
+
+          // Adjust scroll position to maintain visual position
+          const newDocHeight = document.documentElement.scrollHeight;
+          const heightAdded = newDocHeight - oldDocHeight;
+          const newScrollTop = oldScrollTop + heightAdded;
+
+          window.scrollTo(0, Math.max(0, newScrollTop));
+        })();
+      `;
+      webView.injectJavaScript(script);
+
+      // Load images asynchronously
+      if (imagePlaceholders.size > 0) {
+        loadImagesAsync(imagePlaceholders);
+      }
+    }
+  };
+
+  const replaceContent = (newMarkdown: string, startHeadingIndex: number = 0, scrollBehavior: 'preserve' | 'top' | 'bottom' | 'middle' | 'twothirds' = 'preserve') => {
+    if (!webViewReady || !webViewRef.current) {
+      return;
+    }
+
+    const webView = webViewRef.current as any;
+    if (webView && typeof webView.injectJavaScript === 'function') {
+      // Process images in the new markdown
+      let processedMarkdown = newMarkdown;
+      const imagePlaceholders = new Map<string, string>();
+
+      if (baseUrl) {
+        let placeholderIndex = Date.now();
+        processedMarkdown = newMarkdown.replace(/!\[([^\]]*)\]\((?!http)([^)]+)\)/g, (match, alt, imagePath) => {
+          const cleanPath = imagePath.trim().replace(/^\.?\//, '');
+          const placeholderId = `img-placeholder-${placeholderIndex++}`;
+          imagePlaceholders.set(cleanPath, placeholderId);
+          return `![${alt}](#${placeholderId})`;
+        });
+      }
+
+      const script = `
+        (function() {
+          const newMarkdown = ${JSON.stringify(processedMarkdown)};
+          const newHtml = marked.parse(newMarkdown);
+          const startHeadingIndex = ${startHeadingIndex};
+          const scrollBehavior = '${scrollBehavior}';
+
+          // Save current scroll information
+          const oldScrollTop = window.pageYOffset || document.documentElement.scrollTop;
+          const oldDocHeight = document.documentElement.scrollHeight;
+          const windowHeight = window.innerHeight;
+
+          // Replace content
+          const contentDiv = document.getElementById('content');
+          contentDiv.innerHTML = newHtml;
+
+          // Render LaTeX
+          if (typeof renderMathInElement !== 'undefined') {
+            renderMathInElement(contentDiv, {
+              delimiters: [
+                {left: '$$', right: '$$', display: true},
+                {left: '$', right: '$', display: false},
+                {left: '\\\\[', right: '\\\\]', display: true},
+                {left: '\\\\(', right: '\\\\)', display: false}
+              ],
+              throwOnError: false,
+              errorColor: '#cc0000',
+              strict: false
+            });
+          }
+
+          // Add IDs to headings starting from the provided index
+          const headings = contentDiv.querySelectorAll('h1, h2, h3, h4, h5, h6');
+          headings.forEach((heading, idx) => {
+            heading.id = 'heading-' + (startHeadingIndex + idx);
+          });
+
+          // Add click listeners to images
+          const images = contentDiv.querySelectorAll('img');
+          images.forEach(img => {
+            img.addEventListener('click', (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const modal = document.getElementById('imageModal');
+              const modalImage = document.getElementById('modalImage');
+              modalImage.src = img.src;
+              modal.classList.add('active');
+              document.body.classList.add('modal-open');
+              window.currentScale = 1;
+              window.currentX = 0;
+              window.currentY = 0;
+              if (window.updateModalImageTransform) {
+                window.updateModalImageTransform();
+              }
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'imageModalStateChanged',
+                isOpen: true
+              }));
+            });
+          });
+
+          // Calculate new scroll position based on behavior
+          let newScrollTop;
+          const newDocHeight = document.documentElement.scrollHeight;
+
+          if (scrollBehavior === 'top') {
+            // Scroll to top
+            newScrollTop = 0;
+          } else if (scrollBehavior === 'bottom') {
+            // Scroll to bottom
+            newScrollTop = newDocHeight - windowHeight;
+          } else if (scrollBehavior === 'middle') {
+            // BACKWARD: User was at top of old window, reading first chunk
+            // In new window, that chunk is now the middle one
+            // Scroll to ~25-30% to show that chunk near the top with some previous context visible
+            newScrollTop = newDocHeight * 0.28;
+          } else if (scrollBehavior === 'twothirds') {
+            // FORWARD: User was at bottom of old window, reading last chunk
+            // In new window, that chunk is now the middle one (33-66%)
+            // Scroll to ~50-55% to show that chunk filling the screen with its end visible
+            newScrollTop = newDocHeight * 0.52;
+          } else {
+            // Preserve: try to keep the user at approximately the same visual position
+            // When window shifts [A,B,C] -> [B,C,D], we lose chunk A from top
+            // So we need to subtract approximately 1/3 of old height
+            // When window shifts [B,C,D] -> [A,B,C], we add chunk A to top
+            // So we need to add approximately 1/3 of new height
+
+            // For now, just preserve percentage which works reasonably well
+            const scrollPercent = oldDocHeight > 0 ? oldScrollTop / oldDocHeight : 0;
+            newScrollTop = scrollPercent * newDocHeight;
+          }
+
+          window.scrollTo(0, Math.max(0, newScrollTop));
+        })();
+      `;
+      webView.injectJavaScript(script);
+
+      // Load images asynchronously
+      if (imagePlaceholders.size > 0) {
+        loadImagesAsync(imagePlaceholders);
+      }
+    }
+  };
+
   // Expose methods via ref
   useImperativeHandle(ref, () => ({
     closeImageModal,
@@ -755,6 +1006,8 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     scrollToPosition,
     scrollToHeading,
     appendContent,
+    prependContent,
+    replaceContent,
   }));
 
   return (

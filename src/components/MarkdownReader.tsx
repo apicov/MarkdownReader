@@ -105,7 +105,9 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const [tocModalVisible, setTocModalVisible] = useState(false);
   const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
   const fullMarkdownRef = useRef<string>('');
-  const currentLoadedEndRef = useRef<number>(0);
+  const firstLoadedChunkRef = useRef<number>(0); // First chunk currently loaded
+  const lastLoadedChunkRef = useRef<number>(0);  // Last chunk currently loaded
+  const totalChunksRef = useRef<number>(0);
   const isLoadingMoreRef = useRef<boolean>(false);
   const lastScrollEventTime = useRef<number>(0);
   const CHUNK_SIZE = 25000; // 25KB chunks for better memory efficiency
@@ -114,11 +116,50 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     webViewRef.current?.scrollPage(direction);
   };
 
+  // Get chunk content by index
+  const getChunkContent = (chunkIndex: number): string => {
+    const fullMarkdown = fullMarkdownRef.current;
+    const start = chunkIndex * CHUNK_SIZE;
+    const end = Math.min(start + CHUNK_SIZE, fullMarkdown.length);
+    return fullMarkdown.substring(start, end);
+  };
+
+  // Get 3-chunk window content (prev, current, next)
+  const getWindowContent = (centerChunkIndex: number): string => {
+    const totalChunks = totalChunksRef.current;
+    let content = '';
+
+    // Load previous chunk if exists
+    if (centerChunkIndex > 0) {
+      content += getChunkContent(centerChunkIndex - 1);
+    }
+
+    // Load current chunk
+    content += getChunkContent(centerChunkIndex);
+
+    // Load next chunk if exists
+    if (centerChunkIndex < totalChunks - 1) {
+      content += getChunkContent(centerChunkIndex + 1);
+    }
+
+    return content;
+  };
+
+  // Count headings up to a character position
+  const countHeadingsUpToPosition = (position: number): number => {
+    const fullMarkdown = fullMarkdownRef.current;
+    const textBeforePosition = fullMarkdown.substring(0, position);
+    const headingRegex = /^#{1,6}\s+.+$/gm;
+    const matches = textBeforePosition.match(headingRegex);
+    return matches ? matches.length : 0;
+  };
+
   const saveCurrentPosition = async () => {
     try {
       const scrollPosition = await webViewRef.current?.getScrollPosition();
+      const firstChunk = firstLoadedChunkRef.current;
       if (scrollPosition !== undefined && scrollPosition >= 0) {
-        await saveReadingPosition(document.id, scrollPosition);
+        await saveReadingPosition(document.id, scrollPosition, firstChunk);
       }
     } catch (error) {
       console.error('Failed to save reading position:', error);
@@ -244,23 +285,40 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
       const fullMarkdown = await readMarkdownFile(document.markdownFile);
       fullMarkdownRef.current = fullMarkdown;
 
+      // Calculate total chunks
+      const totalChunks = Math.ceil(fullMarkdown.length / CHUNK_SIZE);
+      totalChunksRef.current = totalChunks;
+
       // Extract TOC from full markdown
       const toc = extractTocFromMarkdown(fullMarkdown);
       setTocItems(toc);
 
-      // Load only the first chunk initially
-      const initialEnd = Math.min(CHUNK_SIZE, fullMarkdown.length);
-      const initialContent = fullMarkdown.substring(0, initialEnd);
-      currentLoadedEndRef.current = initialEnd;
+      // Load saved position
+      const savedPosition = await getReadingPosition(document.id);
+      const savedChunkIndex = savedPosition?.chunkIndex ?? 0;
+      const savedScrollOffset = savedPosition?.scrollOffset ?? 0;
 
-      console.log(`Document: ${fullMarkdown.length} chars, loading first ${initialEnd} chars (${CHUNK_SIZE} chunk size)`);
+      // Start at saved chunk (load that chunk + next 2)
+      const startChunkIndex = Math.max(0, Math.min(savedChunkIndex, totalChunks - 1));
+
+      // Load initial 3 chunks starting from saved position
+      const firstChunk = startChunkIndex;
+      const lastChunk = Math.min(startChunkIndex + 2, totalChunks - 1);
+
+      firstLoadedChunkRef.current = firstChunk;
+      lastLoadedChunkRef.current = lastChunk;
+
+      let initialContent = '';
+      for (let i = firstChunk; i <= lastChunk; i++) {
+        initialContent += getChunkContent(i);
+      }
+
+      console.log(`Document: ${fullMarkdown.length} chars in ${totalChunks} chunks`);
+      console.log(`Loading chunks [${firstChunk}, ${lastChunk}]`);
 
       setContent(initialContent);
       setBaseUrl(document.folderPath);
-
-      // Load saved position
-      const savedPosition = await getReadingPosition(document.id);
-      scrollPositionToRestore.current = savedPosition?.scrollOffset ?? null;
+      scrollPositionToRestore.current = savedScrollOffset;
 
       setIsReady(true);
     } catch (error) {
@@ -271,32 +329,39 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   };
 
   const loadMoreContent = useCallback(async () => {
-    if (isLoadingMoreRef.current) return;
+    if (isLoadingMoreRef.current) {
+      console.log('loadMoreContent: Already loading, skipping');
+      return;
+    }
 
-    const fullMarkdown = fullMarkdownRef.current;
-    const currentEnd = currentLoadedEndRef.current;
+    const lastChunk = lastLoadedChunkRef.current;
+    const totalChunks = totalChunksRef.current;
 
-    // Check if there's more content to load
-    if (currentEnd >= fullMarkdown.length) return;
+    console.log(`loadMoreContent triggered: currently loaded [${firstLoadedChunkRef.current}, ${lastChunk}]`);
 
-    // Debounce: only trigger once per second
+    // Check if there's a next chunk to load
+    const nextChunk = lastChunk + 1;
+    if (nextChunk >= totalChunks) {
+      console.log(`loadMoreContent: Already at last chunk ${lastChunk}`);
+      return;
+    }
+
+    // Debounce
     const now = Date.now();
-    if (now - lastScrollEventTime.current < 1000) {
+    if (now - lastScrollEventTime.current < 2000) {
+      console.log('loadMoreContent: Debouncing, too soon');
       return;
     }
     lastScrollEventTime.current = now;
 
     isLoadingMoreRef.current = true;
 
-    // Load next chunk
-    const nextEnd = Math.min(currentEnd + CHUNK_SIZE, fullMarkdown.length);
-    const nextChunk = fullMarkdown.substring(currentEnd, nextEnd);
+    // Simply append the next chunk
+    const chunkContent = getChunkContent(nextChunk);
+    console.log(`✓ Appending chunk ${nextChunk} (${chunkContent.length} chars)`);
 
-    console.log(`Appending: ${currentEnd} -> ${nextEnd} of ${fullMarkdown.length}`);
-
-    // Append content directly to WebView without recreating it
-    webViewRef.current?.appendContent(nextChunk);
-    currentLoadedEndRef.current = nextEnd;
+    webViewRef.current?.appendContent(chunkContent);
+    lastLoadedChunkRef.current = nextChunk;
 
     setTimeout(() => {
       isLoadingMoreRef.current = false;
@@ -304,8 +369,42 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   }, []);
 
   const loadPreviousContent = useCallback(async () => {
-    // Scrolling back through already-loaded content works fine
-    // No need to load previous chunks
+    if (isLoadingMoreRef.current) {
+      console.log('loadPreviousContent: Already loading, skipping');
+      return;
+    }
+
+    const firstChunk = firstLoadedChunkRef.current;
+
+    console.log(`loadPreviousContent triggered: currently loaded [${firstChunk}, ${lastLoadedChunkRef.current}]`);
+
+    // Check if there's a previous chunk to load
+    const prevChunk = firstChunk - 1;
+    if (prevChunk < 0) {
+      console.log(`loadPreviousContent: Already at first chunk 0`);
+      return;
+    }
+
+    // Debounce
+    const now = Date.now();
+    if (now - lastScrollEventTime.current < 2000) {
+      console.log('loadPreviousContent: Debouncing, too soon');
+      return;
+    }
+    lastScrollEventTime.current = now;
+
+    isLoadingMoreRef.current = true;
+
+    // Simply prepend the previous chunk
+    const chunkContent = getChunkContent(prevChunk);
+    console.log(`✓ Prepending chunk ${prevChunk} (${chunkContent.length} chars)`);
+
+    webViewRef.current?.prependContent(chunkContent);
+    firstLoadedChunkRef.current = prevChunk;
+
+    setTimeout(() => {
+      isLoadingMoreRef.current = false;
+    }, 500);
   }, []);
 
   const handleWebViewLoaded = () => {
@@ -327,9 +426,62 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     setIsImageExpanded(isOpen);
   };
 
-  const handleTocItemPress = (headingId: string) => {
+  const handleTocItemPress = async (headingId: string) => {
     setTocModalVisible(false);
-    webViewRef.current?.scrollToHeading(headingId);
+
+    // Extract heading index from ID (e.g., "heading-5" -> 5)
+    const headingIndex = parseInt(headingId.split('-')[1], 10);
+
+    console.log(`TOC: Clicking heading ${headingId}, index ${headingIndex}`);
+
+    // Find the heading in the full markdown
+    const fullMarkdown = fullMarkdownRef.current;
+    const headingRegex = /^#{1,6}\s+.+$/gm;
+    const matches = [...fullMarkdown.matchAll(headingRegex)];
+
+    if (headingIndex >= matches.length) {
+      console.log(`TOC: Heading index ${headingIndex} out of range (${matches.length} headings)`);
+      return;
+    }
+
+    const headingMatch = matches[headingIndex];
+    const headingPosition = headingMatch.index ?? 0;
+
+    // Find which chunk contains this heading
+    const targetChunkIndex = Math.floor(headingPosition / CHUNK_SIZE);
+    const firstLoaded = firstLoadedChunkRef.current;
+    const lastLoaded = lastLoadedChunkRef.current;
+
+    console.log(`TOC: Heading at pos ${headingPosition}, chunk ${targetChunkIndex}, loaded [${firstLoaded}, ${lastLoaded}]`);
+
+    // Check if heading is already loaded
+    if (targetChunkIndex >= firstLoaded && targetChunkIndex <= lastLoaded) {
+      // Heading is already loaded, just scroll to it
+      console.log(`TOC: Heading already loaded, scrolling to ${headingId}`);
+      webViewRef.current?.scrollToHeading(headingId);
+    } else {
+      // Need to load chunks up to target - use replaceContent for big jumps
+      console.log(`TOC: Loading new content starting from chunk ${targetChunkIndex}`);
+
+      const newFirst = targetChunkIndex;
+      const newLast = Math.min(targetChunkIndex + 2, totalChunksRef.current - 1);
+
+      let newContent = '';
+      for (let i = newFirst; i <= newLast; i++) {
+        newContent += getChunkContent(i);
+      }
+
+      firstLoadedChunkRef.current = newFirst;
+      lastLoadedChunkRef.current = newLast;
+
+      webViewRef.current?.replaceContent(newContent, 0);
+
+      // Wait for content to render before scrolling
+      setTimeout(() => {
+        console.log(`TOC: Now scrolling to ${headingId}`);
+        webViewRef.current?.scrollToHeading(headingId);
+      }, 800);
+    }
   };
 
   const toggleTocItem = (index: number) => {
