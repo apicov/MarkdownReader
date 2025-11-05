@@ -30,6 +30,7 @@ import {readMarkdownFile} from '../utils/documentService';
 import {WebViewMarkdownReader, WebViewMarkdownReaderRef} from './WebViewMarkdownReader';
 import {saveReadingPosition, getReadingPosition} from '../utils/readingPositionService';
 import {extractTableOfContents, TocItem} from '../utils/tocService';
+import {getCachedDocumentData, cacheDocumentData} from '../utils/cacheService';
 import {useTranslation} from '../hooks/useTranslation';
 import {TranslationModal} from './TranslationModal';
 import {TableOfContentsModal} from './TableOfContentsModal';
@@ -73,6 +74,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const [tocItems, setTocItems] = useState<TocItem[]>([]);
   const [tocModalVisible, setTocModalVisible] = useState(false);
   const [markdown, setMarkdown] = useState('');
+  const [imagePaths, setImagePaths] = useState<string[]>([]);
 
   // ============================================================================
   // REFS
@@ -218,9 +220,38 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
       // Read full markdown content
       const content = await readMarkdownFile(document.markdownFile);
 
-      // Extract table of contents
-      const toc = extractTableOfContents(content);
+      // Try to get cached data first
+      const cachedData = await getCachedDocumentData(document.id, content);
+
+      let toc: TocItem[];
+      let imagePaths: string[] = [];
+
+      if (cachedData) {
+        // Use cached data
+        console.log(`Using cached data for document: ${document.id}`);
+        toc = cachedData.toc;
+        imagePaths = cachedData.imagePaths;
+      } else {
+        // Extract table of contents
+        console.log(`Extracting TOC for document: ${document.id}`);
+        toc = extractTableOfContents(content);
+
+        // Extract image paths
+        if (document.folderPath) {
+          const imageRegex = /!\[([^\]]*)\]\((?!http)([^)]+)\)/g;
+          let match;
+          while ((match = imageRegex.exec(content)) !== null) {
+            const cleanPath = match[2].trim().replace(/^\.?\//, '');
+            imagePaths.push(cleanPath);
+          }
+        }
+
+        // Cache the extracted data
+        await cacheDocumentData(document.id, content, toc, imagePaths);
+      }
+
       setTocItems(toc);
+      setImagePaths(imagePaths);
 
       // Load saved reading position
       const savedPosition = await getReadingPosition(document.id);
@@ -236,7 +267,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
       setMarkdown(content);
       setIsReady(true);
 
-      console.log(`Document loaded: ${content.length} chars`);
+      console.log(`Document loaded: ${content.length} chars, ${toc.length} headings, ${imagePaths.length} images`);
     } catch (error) {
       console.error('Error loading document:', error);
       Alert.alert('Error', 'Failed to load document');
@@ -363,6 +394,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
             markdown={markdown}
             fontSize={fontSize}
             baseUrl={baseUrl}
+            imagePaths={imagePaths}
             onTextSelected={handleTextSelected}
             onImageModalStateChange={handleImageModalStateChange}
             onWebViewLoaded={handleWebViewLoaded}

@@ -9,6 +9,7 @@ interface WebViewMarkdownReaderProps {
   markdown: string;
   fontSize: number;
   baseUrl?: string;
+  imagePaths?: string[];
   onTextSelected?: (text: string) => void;
   onImageModalStateChange?: (isOpen: boolean) => void;
   onWebViewLoaded?: () => void;
@@ -26,6 +27,7 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
   markdown,
   fontSize,
   baseUrl = '',
+  imagePaths = [],
   onTextSelected,
   onImageModalStateChange,
   onWebViewLoaded,
@@ -49,16 +51,6 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     setWebViewReady(false);
     webViewReadyRef.current = false;
     setLoading(true);
-
-    // Collect image paths for lazy loading
-    const imagePaths: string[] = [];
-    if (baseUrl) {
-      markdown.replace(/!\[([^\]]*)\]\((?!http)([^)]+)\)/g, (match, alt, imagePath) => {
-        const cleanPath = imagePath.trim().replace(/^\.?\//, '');
-        imagePaths.push(cleanPath);
-        return match;
-      });
-    }
 
     const html = `
 <!DOCTYPE html>
