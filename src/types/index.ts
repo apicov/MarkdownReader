@@ -27,8 +27,6 @@ export interface ReadingPosition {
   documentId: string;
   /** Vertical scroll offset in pixels */
   scrollOffset: number;
-  /** Index of the currently loaded chunk (for paginated documents) */
-  chunkIndex?: number;
   /** Timestamp when this position was last saved */
   timestamp: number;
 }

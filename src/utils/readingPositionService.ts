@@ -2,7 +2,7 @@
  * Reading Position Service
  *
  * Manages persistent storage of reading positions for documents.
- * Tracks scroll offset and chunk index to restore user's exact reading position
+ * Tracks scroll offset to restore user's exact reading position
  * when reopening a document.
  */
 
@@ -13,17 +13,15 @@ import {STORAGE_KEY_READING_POSITIONS} from '../constants';
 /**
  * Save the current reading position for a document
  *
- * Stores scroll offset and optional chunk index to restore position later.
+ * Stores scroll offset to restore position later.
  * Overwrites any existing position for the same document.
  *
  * @param documentId - Unique identifier for the document
  * @param scrollOffset - Vertical scroll position in pixels
- * @param chunkIndex - Optional index of the currently loaded chunk (for pagination)
  */
 export const saveReadingPosition = async (
   documentId: string,
   scrollOffset: number,
-  chunkIndex?: number,
 ): Promise<void> => {
   try {
     const positions = await getAllReadingPositions();
@@ -32,7 +30,6 @@ export const saveReadingPosition = async (
     positions[documentId] = {
       documentId,
       scrollOffset,
-      chunkIndex,
       timestamp: Date.now(),
     };
 

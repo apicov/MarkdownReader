@@ -95,7 +95,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     try {
       const scrollPosition = await webViewRef.current?.getScrollPosition();
       if (scrollPosition !== undefined && scrollPosition >= 0) {
-        await saveReadingPosition(document.id, scrollPosition, 0);
+        await saveReadingPosition(document.id, scrollPosition);
       }
     } catch (error) {
       console.error('Failed to save reading position:', error);
