@@ -12,8 +12,6 @@ interface WebViewMarkdownReaderProps {
   onTextSelected?: (text: string) => void;
   onImageModalStateChange?: (isOpen: boolean) => void;
   onWebViewLoaded?: () => void;
-  onScrollNearEnd?: () => void;
-  onScrollNearStart?: () => void;
 }
 
 export interface WebViewMarkdownReaderRef {
@@ -22,9 +20,6 @@ export interface WebViewMarkdownReaderRef {
   getScrollPosition: () => Promise<number>;
   scrollToPosition: (position: number) => void;
   scrollToHeading: (headingId: string) => void;
-  appendContent: (additionalMarkdown: string) => void;
-  prependContent: (additionalMarkdown: string) => void;
-  replaceContent: (newMarkdown: string, startHeadingIndex?: number, scrollBehavior?: 'preserve' | 'top' | 'bottom' | 'middle' | 'twothirds') => void;
 }
 
 export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebViewMarkdownReaderProps>(({
@@ -34,8 +29,6 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
   onTextSelected,
   onImageModalStateChange,
   onWebViewLoaded,
-  onScrollNearEnd,
-  onScrollNearStart,
 }, ref) => {
   const {theme} = useTheme();
   const webViewRef = useRef<WebView>(null);
@@ -57,18 +50,13 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     webViewReadyRef.current = false;
     setLoading(true);
 
-    // Replace images with placeholders first, then load them async
-    let processedMarkdown = markdown;
-    const imagePlaceholders = new Map<string, string>(); // imagePath -> placeholder ID
-
+    // Collect image paths for lazy loading
+    const imagePaths: string[] = [];
     if (baseUrl) {
-      // Replace image paths with placeholder IDs
-      let placeholderIndex = 0;
-      processedMarkdown = markdown.replace(/!\[([^\]]*)\]\((?!http)([^)]+)\)/g, (match, alt, imagePath) => {
+      markdown.replace(/!\[([^\]]*)\]\((?!http)([^)]+)\)/g, (match, alt, imagePath) => {
         const cleanPath = imagePath.trim().replace(/^\.?\//, '');
-        const placeholderId = `img-placeholder-${placeholderIndex++}`;
-        imagePlaceholders.set(cleanPath, placeholderId);
-        return `![${alt}](#${placeholderId})`;
+        imagePaths.push(cleanPath);
+        return match;
       });
     }
 
@@ -124,6 +112,11 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
       margin: 10px 0;
       display: block;
       cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.3s ease-in;
+    }
+    img.loaded {
+      opacity: 1;
     }
     #imageModal {
       display: none;
@@ -148,6 +141,7 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
       max-height: 100%;
       object-fit: contain;
       transition: transform 0.2s;
+      opacity: 1 !important;
     }
     table {
       max-width: 100%;
@@ -183,7 +177,7 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
   </div>
   <script>
     // Render markdown
-    const markdown = ${JSON.stringify(processedMarkdown)};
+    const markdown = ${JSON.stringify(markdown)};
     document.getElementById('content').innerHTML = marked.parse(markdown);
 
     // Render LaTeX with KaTeX
@@ -205,6 +199,20 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
       heading.id = 'heading-' + index;
     });
 
+    // Convert image src to data-src for lazy loading
+    const images = document.querySelectorAll('#content img');
+    images.forEach(img => {
+      const src = img.getAttribute('src');
+      // Only process local images, not http/https URLs
+      if (src && !src.startsWith('http') && !src.startsWith('data:')) {
+        img.setAttribute('data-src', src);
+        img.removeAttribute('src');
+      } else if (src) {
+        // For external images, mark as loaded immediately
+        img.classList.add('loaded');
+      }
+    });
+
     // Image modal functionality
     const modal = document.getElementById('imageModal');
     const modalImage = document.getElementById('modalImage');
@@ -217,15 +225,6 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     let dragStartY = 0;
     let wasPinching = false;
     let pinchEndTime = 0;
-
-    // Add click listeners to all images
-    function setupImageListeners() {
-      document.querySelectorAll('#content img').forEach(img => {
-        ${IMAGE_CLICK_LISTENER_SCRIPT}
-      });
-    }
-
-    setupImageListeners();
 
     // Prevent scrolling on modal
     modal.addEventListener('touchmove', (e) => {
@@ -348,46 +347,50 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
       }, 500); // Increased timeout to capture full selection
     });
 
-    // Detect scroll near end or start to trigger loading more content
-    let scrollTimeout;
-    let lastScrollTop = 0;
-
-    window.addEventListener('scroll', () => {
-      clearTimeout(scrollTimeout);
-      scrollTimeout = setTimeout(() => {
-        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-        const windowHeight = window.innerHeight;
-        const documentHeight = document.documentElement.scrollHeight;
-
-        // Determine scroll direction
-        const isScrollingDown = scrollTop > lastScrollTop;
-        lastScrollTop = scrollTop;
-
-        // Calculate distances
-        const distanceFromBottom = documentHeight - (scrollTop + windowHeight);
-        const distanceFromTop = scrollTop;
-
-        // Calculate scroll percentage through document
-        const scrollPercent = scrollTop / (documentHeight - windowHeight);
-
-        // Very tight trigger - only in the outer 10% to avoid the middle chunk
-        const triggerDistance = windowHeight * 0.2;
-
-        // Only trigger near END if in bottom 10% and scrolling down
-        if (isScrollingDown && scrollPercent > 0.90 && distanceFromBottom < triggerDistance) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({
-            type: 'scrollNearEnd'
-          }));
-        }
-
-        // Only trigger near START if in top 10% and scrolling up
-        if (!isScrollingDown && scrollPercent < 0.10 && distanceFromTop < triggerDistance) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({
-            type: 'scrollNearStart'
-          }));
-        }
-      }, 300);
+    // For external (http/https) images only, set up lazy loading immediately
+    // Local images will be handled by loadImagesAsync which injects base64 data
+    const externalImages = document.querySelectorAll('img[data-src]');
+    const hasExternalImages = Array.from(externalImages).some(img => {
+      const src = img.getAttribute('data-src');
+      return src && (src.startsWith('http://') || src.startsWith('https://'));
     });
+
+    if (hasExternalImages) {
+      const imageObserver = new IntersectionObserver((entries, observer) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const img = entry.target;
+            if (img.dataset.src) {
+              const srcToLoad = img.dataset.src;
+              // Only load external images here
+              if (srcToLoad.startsWith('http://') || srcToLoad.startsWith('https://')) {
+                img.src = srcToLoad;
+                img.onload = () => {
+                  img.classList.add('loaded');
+                  // Add click listener after image is fully loaded
+                  ${IMAGE_CLICK_LISTENER_SCRIPT}
+                };
+                img.onerror = () => {
+                  img.classList.add('loaded'); // Show broken image icon
+                };
+                delete img.dataset.src;
+                observer.unobserve(img);
+              }
+            }
+          }
+        });
+      }, {
+        rootMargin: '50px' // Start loading slightly before image enters viewport
+      });
+
+      // Only observe external images
+      externalImages.forEach(img => {
+        const src = img.getAttribute('data-src');
+        if (src && (src.startsWith('http://') || src.startsWith('https://'))) {
+          imageObserver.observe(img);
+        }
+      });
+    }
 
     // Signal that page is loaded
     window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -405,90 +408,96 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
       await tempHtmlFile.write(html);
       setHtmlUri(tempHtmlFile.uri);
 
-      // Store pending images to load after WebView is ready
-      if (baseUrl && imagePlaceholders.size > 0) {
-        pendingImagesRef.current = imagePlaceholders;
+      // Store image paths for lazy loading after WebView is ready
+      if (baseUrl && imagePaths.length > 0) {
+        pendingImagesRef.current = new Map(imagePaths.map((path, idx) => [path, `img-${idx}`]));
       }
     } catch (error) {
       console.error('Error creating HTML file:', error);
     }
   };
 
-  const loadImagesAsync = async (imagePlaceholders: Map<string, string>) => {
+  const loadImagesAsync = async (imagePaths: Map<string, string>) => {
     try {
       const baseDir = new Directory(baseUrl);
 
-      // Build file map asynchronously with yielding to prevent UI freeze
+      // Build file map
       const fileMap = new Map<string, File>();
       const items = baseDir.list();
-      let processedCount = 0;
 
       for (const item of items) {
-        // Yield to UI thread every 10 items
-        if (processedCount % 10 === 0 && processedCount > 0) {
-          await new Promise(resolve => setTimeout(resolve, 0));
-        }
-
         if (item instanceof File) {
           fileMap.set(item.name, item);
         }
-        processedCount++;
       }
 
-      // Load images in small batches with yielding between batches
-      const imageEntries = Array.from(imagePlaceholders.entries());
-      const BATCH_SIZE = 2; // Process 2 images at a time
+      // Convert all images to base64 and inject into WebView as a batch
+      const imageData: Record<string, string> = {};
 
-      for (let i = 0; i < imageEntries.length; i += BATCH_SIZE) {
-        // Check if WebView is still available using ref (not state)
-        if (!webViewReadyRef.current || !webViewRef.current) {
-          return;
-        }
-
-        // Yield to UI thread between batches
-        if (i > 0) {
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
-
-        const batch = imageEntries.slice(i, i + BATCH_SIZE);
-
-        // Process batch in parallel
-        await Promise.all(batch.map(async ([imagePath, placeholderId]) => {
-          const file = fileMap.get(imagePath);
-          if (file) {
-            try {
-              const base64 = await file.base64();
-              const ext = file.extension?.toLowerCase() || 'jpeg';
-              const mimeType = ext === 'png' ? 'image/png' :
-                              ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' :
-                              ext === 'gif' ? 'image/gif' :
-                              ext === 'webp' ? 'image/webp' : 'image/jpeg';
-              const dataUri = `data:${mimeType};base64,${base64}`;
-
-              // Check WebView readiness before injecting
-              const webView = webViewRef.current as any;
-              if (!webViewReadyRef.current || !webView || typeof webView.injectJavaScript !== 'function') {
-                return; // Skip this image silently
-              }
-
-              // Inject JavaScript to replace placeholder with actual image
-              const script = `
-                (function() {
-                  const img = document.querySelector('img[src="#${placeholderId}"]');
-                  if (img) {
-                    img.src = ${JSON.stringify(dataUri)};
-                    // Add click listener for image expansion
-                    ${IMAGE_CLICK_LISTENER_SCRIPT}
-                  }
-                })();
-              `;
-
-              webView.injectJavaScript(script);
-            } catch (error) {
-              console.error(`Failed to load image ${imagePath}:`, error);
-            }
+      for (const [imagePath] of imagePaths) {
+        const file = fileMap.get(imagePath);
+        if (file) {
+          try {
+            const base64 = await file.base64();
+            const ext = file.extension?.toLowerCase() || 'jpeg';
+            const mimeType = ext === 'png' ? 'image/png' :
+                            ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' :
+                            ext === 'gif' ? 'image/gif' :
+                            ext === 'webp' ? 'image/webp' : 'image/jpeg';
+            const dataUri = `data:${mimeType};base64,${base64}`;
+            imageData[imagePath] = dataUri;
+          } catch (error) {
+            console.error(`Failed to load image ${imagePath}:`, error);
           }
-        }));
+        }
+      }
+
+      // Inject all image data into WebView at once
+      const webView = webViewRef.current as any;
+      if (webViewReadyRef.current && webView && typeof webView.injectJavaScript === 'function') {
+        const script = `
+          (function() {
+            const imageData = ${JSON.stringify(imageData)};
+
+            // Update all images with data-src attributes
+            document.querySelectorAll('img[data-src]').forEach(img => {
+              const src = img.getAttribute('data-src');
+              if (imageData[src]) {
+                img.setAttribute('data-src', imageData[src]);
+              }
+            });
+
+            // Re-observe images for lazy loading with updated data-src
+            const imageObserver = new IntersectionObserver((entries, observer) => {
+              entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                  const img = entry.target;
+                  if (img.dataset.src) {
+                    const srcToLoad = img.dataset.src;
+                    img.src = srcToLoad;
+                    img.onload = () => {
+                      img.classList.add('loaded');
+                      // Add click listener after image is fully loaded
+                      ${IMAGE_CLICK_LISTENER_SCRIPT}
+                    };
+                    img.onerror = () => {
+                      img.classList.add('loaded');
+                    };
+                    delete img.dataset.src;
+                    observer.unobserve(img);
+                  }
+                }
+              });
+            }, {
+              rootMargin: '50px'
+            });
+
+            document.querySelectorAll('img[data-src]').forEach(img => {
+              imageObserver.observe(img);
+            });
+          })();
+        `;
+        webView.injectJavaScript(script);
       }
     } catch (error) {
       console.error('Failed to load images:', error);
@@ -526,10 +535,6 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
       } else if (data.type === 'scrollPosition' && scrollPositionResolverRef.current) {
         scrollPositionResolverRef.current(data.position);
         scrollPositionResolverRef.current = null;
-      } else if (data.type === 'scrollNearEnd' && onScrollNearEnd) {
-        onScrollNearEnd();
-      } else if (data.type === 'scrollNearStart' && onScrollNearStart) {
-        onScrollNearStart();
       } else if (data.type === 'debug') {
         console.log(`[WebView Debug] ${data.message}`);
       }
@@ -660,279 +665,6 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     }
   };
 
-  const appendContent = (additionalMarkdown: string) => {
-    if (!webViewReady || !webViewRef.current) {
-      return;
-    }
-
-    const webView = webViewRef.current as any;
-    if (webView && typeof webView.injectJavaScript === 'function') {
-      // Process images in the additional markdown the same way as initial load
-      let processedMarkdown = additionalMarkdown;
-      const imagePlaceholders = new Map<string, string>();
-
-      if (baseUrl) {
-        let placeholderIndex = Date.now(); // Use timestamp to ensure unique IDs
-        processedMarkdown = additionalMarkdown.replace(/!\[([^\]]*)\]\((?!http)([^)]+)\)/g, (match, alt, imagePath) => {
-          const cleanPath = imagePath.trim().replace(/^\.?\//, '');
-          const placeholderId = `img-placeholder-${placeholderIndex++}`;
-          imagePlaceholders.set(cleanPath, placeholderId);
-          return `![${alt}](#${placeholderId})`;
-        });
-      }
-
-      const script = `
-        (function() {
-          const additionalMarkdown = ${JSON.stringify(processedMarkdown)};
-          const additionalHtml = marked.parse(additionalMarkdown);
-
-          // Get current heading count to continue ID sequence
-          const existingHeadings = document.querySelectorAll('#content h1, #content h2, #content h3, #content h4, #content h5, #content h6');
-          let headingIndex = existingHeadings.length;
-
-          // Append new content
-          const contentDiv = document.getElementById('content');
-          const tempDiv = document.createElement('div');
-          tempDiv.innerHTML = additionalHtml;
-
-          // Render LaTeX in new content
-          if (typeof renderMathInElement !== 'undefined') {
-            renderMathInElement(tempDiv, {
-              delimiters: [
-                {left: '$$', right: '$$', display: true},
-                {left: '$', right: '$', display: false},
-                {left: '\\\\[', right: '\\\\]', display: true},
-                {left: '\\\\(', right: '\\\\)', display: false}
-              ],
-              throwOnError: false,
-              errorColor: '#cc0000',
-              strict: false
-            });
-          }
-
-          // Add IDs to new headings
-          const newHeadings = tempDiv.querySelectorAll('h1, h2, h3, h4, h5, h6');
-          newHeadings.forEach(heading => {
-            heading.id = 'heading-' + headingIndex++;
-          });
-
-          // Add click listeners to new images
-          const newImages = tempDiv.querySelectorAll('img');
-          newImages.forEach(img => {
-            ${IMAGE_CLICK_LISTENER_SCRIPT}
-          });
-
-          contentDiv.appendChild(tempDiv);
-        })();
-      `;
-      webView.injectJavaScript(script);
-
-      // Load images asynchronously if there are any
-      if (imagePlaceholders.size > 0) {
-        loadImagesAsync(imagePlaceholders);
-      }
-    }
-  };
-
-  const prependContent = (additionalMarkdown: string) => {
-    if (!webViewReady || !webViewRef.current) {
-      return;
-    }
-
-    const webView = webViewRef.current as any;
-    if (webView && typeof webView.injectJavaScript === 'function') {
-      // Process images
-      let processedMarkdown = additionalMarkdown;
-      const imagePlaceholders = new Map<string, string>();
-
-      if (baseUrl) {
-        let placeholderIndex = Date.now();
-        processedMarkdown = additionalMarkdown.replace(/!\[([^\]]*)\]\((?!http)([^)]+)\)/g, (match, alt, imagePath) => {
-          const cleanPath = imagePath.trim().replace(/^\.?\//, '');
-          const placeholderId = `img-placeholder-${placeholderIndex++}`;
-          imagePlaceholders.set(cleanPath, placeholderId);
-          return `![${alt}](#${placeholderId})`;
-        });
-      }
-
-      const script = `
-        (function() {
-          const additionalMarkdown = ${JSON.stringify(processedMarkdown)};
-          const additionalHtml = marked.parse(additionalMarkdown);
-
-          // Save current scroll position
-          const oldScrollTop = window.pageYOffset || document.documentElement.scrollTop;
-          const oldDocHeight = document.documentElement.scrollHeight;
-
-          // Get current heading count to continue ID sequence
-          const existingHeadings = document.querySelectorAll('#content h1, #content h2, #content h3, #content h4, #content h5, #content h6');
-          const totalHeadings = existingHeadings.length;
-
-          // Prepend new content
-          const contentDiv = document.getElementById('content');
-          const tempDiv = document.createElement('div');
-          tempDiv.innerHTML = additionalHtml;
-
-          // Render LaTeX in new content
-          if (typeof renderMathInElement !== 'undefined') {
-            renderMathInElement(tempDiv, {
-              delimiters: [
-                {left: '$$', right: '$$', display: true},
-                {left: '$', right: '$', display: false},
-                {left: '\\\\[', right: '\\\\]', display: true},
-                {left: '\\\\(', right: '\\\\)', display: false}
-              ],
-              throwOnError: false,
-              errorColor: '#cc0000',
-              strict: false
-            });
-          }
-
-          // Add IDs to new headings (they come before existing ones, so start from 0)
-          const newHeadings = tempDiv.querySelectorAll('h1, h2, h3, h4, h5, h6');
-          let headingIndex = 0;
-          newHeadings.forEach(heading => {
-            heading.id = 'heading-' + headingIndex++;
-          });
-
-          // Re-number existing headings
-          existingHeadings.forEach(heading => {
-            heading.id = 'heading-' + headingIndex++;
-          });
-
-          // Add click listeners to new images
-          const newImages = tempDiv.querySelectorAll('img');
-          newImages.forEach(img => {
-            ${IMAGE_CLICK_LISTENER_SCRIPT}
-          });
-
-          // Insert at the beginning
-          contentDiv.insertBefore(tempDiv, contentDiv.firstChild);
-
-          // Adjust scroll position to maintain visual position
-          const newDocHeight = document.documentElement.scrollHeight;
-          const heightAdded = newDocHeight - oldDocHeight;
-          const newScrollTop = oldScrollTop + heightAdded;
-
-          window.scrollTo(0, Math.max(0, newScrollTop));
-        })();
-      `;
-      webView.injectJavaScript(script);
-
-      // Load images asynchronously
-      if (imagePlaceholders.size > 0) {
-        loadImagesAsync(imagePlaceholders);
-      }
-    }
-  };
-
-  const replaceContent = (newMarkdown: string, startHeadingIndex: number = 0, scrollBehavior: 'preserve' | 'top' | 'bottom' | 'middle' | 'twothirds' = 'preserve') => {
-    if (!webViewReady || !webViewRef.current) {
-      return;
-    }
-
-    const webView = webViewRef.current as any;
-    if (webView && typeof webView.injectJavaScript === 'function') {
-      // Process images in the new markdown
-      let processedMarkdown = newMarkdown;
-      const imagePlaceholders = new Map<string, string>();
-
-      if (baseUrl) {
-        let placeholderIndex = Date.now();
-        processedMarkdown = newMarkdown.replace(/!\[([^\]]*)\]\((?!http)([^)]+)\)/g, (match, alt, imagePath) => {
-          const cleanPath = imagePath.trim().replace(/^\.?\//, '');
-          const placeholderId = `img-placeholder-${placeholderIndex++}`;
-          imagePlaceholders.set(cleanPath, placeholderId);
-          return `![${alt}](#${placeholderId})`;
-        });
-      }
-
-      const script = `
-        (function() {
-          const newMarkdown = ${JSON.stringify(processedMarkdown)};
-          const newHtml = marked.parse(newMarkdown);
-          const startHeadingIndex = ${startHeadingIndex};
-          const scrollBehavior = '${scrollBehavior}';
-
-          // Save current scroll information
-          const oldScrollTop = window.pageYOffset || document.documentElement.scrollTop;
-          const oldDocHeight = document.documentElement.scrollHeight;
-          const windowHeight = window.innerHeight;
-
-          // Replace content
-          const contentDiv = document.getElementById('content');
-          contentDiv.innerHTML = newHtml;
-
-          // Render LaTeX
-          if (typeof renderMathInElement !== 'undefined') {
-            renderMathInElement(contentDiv, {
-              delimiters: [
-                {left: '$$', right: '$$', display: true},
-                {left: '$', right: '$', display: false},
-                {left: '\\\\[', right: '\\\\]', display: true},
-                {left: '\\\\(', right: '\\\\)', display: false}
-              ],
-              throwOnError: false,
-              errorColor: '#cc0000',
-              strict: false
-            });
-          }
-
-          // Add IDs to headings starting from the provided index
-          const headings = contentDiv.querySelectorAll('h1, h2, h3, h4, h5, h6');
-          headings.forEach((heading, idx) => {
-            heading.id = 'heading-' + (startHeadingIndex + idx);
-          });
-
-          // Add click listeners to images
-          const images = contentDiv.querySelectorAll('img');
-          images.forEach(img => {
-            ${IMAGE_CLICK_LISTENER_SCRIPT}
-          });
-
-          // Calculate new scroll position based on behavior
-          let newScrollTop;
-          const newDocHeight = document.documentElement.scrollHeight;
-
-          if (scrollBehavior === 'top') {
-            // Scroll to top
-            newScrollTop = 0;
-          } else if (scrollBehavior === 'bottom') {
-            // Scroll to bottom
-            newScrollTop = newDocHeight - windowHeight;
-          } else if (scrollBehavior === 'middle') {
-            // BACKWARD: User was at top of old window, reading first chunk
-            // In new window, that chunk is now the middle one
-            // Scroll to ~25-30% to show that chunk near the top with some previous context visible
-            newScrollTop = newDocHeight * 0.28;
-          } else if (scrollBehavior === 'twothirds') {
-            // FORWARD: User was at bottom of old window, reading last chunk
-            // In new window, that chunk is now the middle one (33-66%)
-            // Scroll to ~50-55% to show that chunk filling the screen with its end visible
-            newScrollTop = newDocHeight * 0.52;
-          } else {
-            // Preserve: try to keep the user at approximately the same visual position
-            // When window shifts [A,B,C] -> [B,C,D], we lose chunk A from top
-            // So we need to subtract approximately 1/3 of old height
-            // When window shifts [B,C,D] -> [A,B,C], we add chunk A to top
-            // So we need to add approximately 1/3 of new height
-
-            // For now, just preserve percentage which works reasonably well
-            const scrollPercent = oldDocHeight > 0 ? oldScrollTop / oldDocHeight : 0;
-            newScrollTop = scrollPercent * newDocHeight;
-          }
-
-          window.scrollTo(0, Math.max(0, newScrollTop));
-        })();
-      `;
-      webView.injectJavaScript(script);
-
-      // Load images asynchronously
-      if (imagePlaceholders.size > 0) {
-        loadImagesAsync(imagePlaceholders);
-      }
-    }
-  };
 
   // Expose methods via ref
   useImperativeHandle(ref, () => ({
@@ -941,9 +673,6 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
     getScrollPosition,
     scrollToPosition,
     scrollToHeading,
-    appendContent,
-    prependContent,
-    replaceContent,
   }));
 
   return (

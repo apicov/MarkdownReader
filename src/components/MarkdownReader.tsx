@@ -1,14 +1,14 @@
 /**
- * Markdown Reader Component (Refactored)
+ * Markdown Reader Component
  *
  * Main orchestrator for the markdown reading experience.
- * Coordinates between chunked document loading, TOC navigation, translation,
+ * Coordinates document loading, TOC navigation, translation,
  * and scroll position management.
  *
  * This component focuses on high-level orchestration, delegating:
- * - Document chunking to useChunkPagination hook
  * - Translation to useTranslation hook
  * - TOC extraction to tocService
+ * - Rendering and lazy image loading to WebViewMarkdownReader
  * - UI modals to separate components
  */
 
@@ -29,8 +29,7 @@ import {Document} from '../types';
 import {readMarkdownFile} from '../utils/documentService';
 import {WebViewMarkdownReader, WebViewMarkdownReaderRef} from './WebViewMarkdownReader';
 import {saveReadingPosition, getReadingPosition} from '../utils/readingPositionService';
-import {extractTableOfContents, TocItem, getHeadingPositions} from '../utils/tocService';
-import {useChunkPagination} from '../hooks/useChunkPagination';
+import {extractTableOfContents, TocItem} from '../utils/tocService';
 import {useTranslation} from '../hooks/useTranslation';
 import {TranslationModal} from './TranslationModal';
 import {TableOfContentsModal} from './TableOfContentsModal';
@@ -38,7 +37,6 @@ import {FontSizeModal} from './FontSizeModal';
 import {
   AUTO_SAVE_INTERVAL_MS,
   SCROLL_RESTORE_DELAY_MS,
-  CHUNK_SIZE,
 } from '../constants';
 
 interface MarkdownReaderProps {
@@ -74,7 +72,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const [isImageExpanded, setIsImageExpanded] = useState(false);
   const [tocItems, setTocItems] = useState<TocItem[]>([]);
   const [tocModalVisible, setTocModalVisible] = useState(false);
-  const [fullMarkdown, setFullMarkdown] = useState('');
+  const [markdown, setMarkdown] = useState('');
 
   // ============================================================================
   // REFS
@@ -84,27 +82,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
   const [webViewLoaded, setWebViewLoaded] = useState(false);
   const scrollPositionToRestore = useRef<number | null>(null);
   const hasRestoredPosition = useRef<boolean>(false);
-  const headingPositionsRef = useRef<Map<string, number>>(new Map());
-  const savedChunkIndexRef = useRef<number>(0);
-  const initialContentRef = useRef<string>('');
-  const isTocNavigatingRef = useRef<boolean>(false);
 
-  // ============================================================================
-  // CHUNK PAGINATION HOOK
-  // ============================================================================
-
-  const {
-    currentContent,
-    firstLoadedChunk,
-    lastLoadedChunk,
-    totalChunks,
-    loadInitialChunks,
-    loadMoreContent,
-    loadPreviousContent,
-    jumpToChunk,
-    getChunkForPosition,
-    isChunkLoaded,
-  } = useChunkPagination(fullMarkdown);
 
   // ============================================================================
   // SCROLL POSITION MANAGEMENT
@@ -117,7 +95,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     try {
       const scrollPosition = await webViewRef.current?.getScrollPosition();
       if (scrollPosition !== undefined && scrollPosition >= 0) {
-        await saveReadingPosition(document.id, scrollPosition, firstLoadedChunk);
+        await saveReadingPosition(document.id, scrollPosition, 0);
       }
     } catch (error) {
       console.error('Failed to save reading position:', error);
@@ -190,62 +168,7 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
    */
   const handleTocItemPress = async (headingId: string) => {
     setTocModalVisible(false);
-
-    // Get heading position in full document
-    const headingPosition = headingPositionsRef.current.get(headingId);
-    if (headingPosition === undefined) {
-      console.log(`TOC: Heading ${headingId} not found in positions map`);
-      return;
-    }
-
-    // Calculate which chunk contains this heading
-    const targetChunkIndex = getChunkForPosition(headingPosition);
-    const isLoaded = isChunkLoaded(targetChunkIndex);
-
-    console.log(`TOC: Navigating to ${headingId} at position ${headingPosition}, chunk ${targetChunkIndex}, isLoaded: ${isLoaded}`);
-
-    if (isLoaded) {
-      // Heading is already in memory, just scroll
-      console.log(`TOC: Scrolling to ${headingId} (already loaded)`);
-      webViewRef.current?.scrollToHeading(headingId);
-    } else {
-      // Need to load new chunks
-      console.log(`TOC: Loading new chunks for ${headingId}`);
-
-      // Disable scroll-based chunk loading during TOC navigation
-      isTocNavigatingRef.current = true;
-
-      // Extract the heading number from the ID (e.g., "heading-647" -> 647)
-      const targetHeadingNumber = parseInt(headingId.replace('heading-', ''), 10);
-
-      const newContent = jumpToChunk(targetChunkIndex);
-
-      // Calculate the starting heading index for the new content
-      // jumpToChunk loads [targetChunkIndex, targetChunkIndex+1, targetChunkIndex+2]
-      const actualFirstChunk = Math.max(0, targetChunkIndex);
-      const chunkStart = actualFirstChunk * CHUNK_SIZE;
-      const textBeforeChunk = fullMarkdown.substring(0, chunkStart);
-      // Match full heading line to count correctly
-      const headingsBeforeChunk = (textBeforeChunk.match(/^#{1,6}\s+.+$/gm) || []).length;
-
-      console.log(`TOC: Replacing content, first chunk: ${actualFirstChunk}, heading offset: ${headingsBeforeChunk}`);
-      console.log(`TOC: Target heading ${headingId} (number ${targetHeadingNumber}) at position ${headingPosition}`);
-
-      // Use replaceContent to update the WebView with proper heading indices
-      // This will assign IDs starting from headingsBeforeChunk
-      webViewRef.current?.replaceContent(newContent, headingsBeforeChunk, 'top');
-
-      // Wait for content to render, then scroll
-      setTimeout(() => {
-        console.log(`TOC: Scrolling to ${headingId} (should exist with offset ${headingsBeforeChunk})`);
-        webViewRef.current?.scrollToHeading(headingId);
-
-        // Re-enable scroll-based chunk loading after navigation completes
-        setTimeout(() => {
-          isTocNavigatingRef.current = false;
-        }, 500);
-      }, SCROLL_RESTORE_DELAY_MS);
-    }
+    webViewRef.current?.scrollToHeading(headingId);
   };
 
   // ============================================================================
@@ -293,19 +216,14 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
 
     try {
       // Read full markdown content
-      const markdown = await readMarkdownFile(document.markdownFile);
+      const content = await readMarkdownFile(document.markdownFile);
 
       // Extract table of contents
-      const toc = extractTableOfContents(markdown);
+      const toc = extractTableOfContents(content);
       setTocItems(toc);
-
-      // Get heading positions for navigation
-      const positions = getHeadingPositions(markdown);
-      headingPositionsRef.current = positions;
 
       // Load saved reading position
       const savedPosition = await getReadingPosition(document.id);
-      const savedChunkIndex = savedPosition?.chunkIndex ?? 0;
       const savedScrollOffset = savedPosition?.scrollOffset ?? 0;
 
       // Store scroll position to restore
@@ -314,14 +232,11 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
       // Set base URL for images
       setBaseUrl(document.folderPath);
 
-      // Set full markdown - this will trigger useChunkPagination to recalculate
-      setFullMarkdown(markdown);
+      // Set markdown content
+      setMarkdown(content);
+      setIsReady(true);
 
-      // Store the chunk index we want to start from
-      // We'll load chunks in an effect when fullMarkdown changes
-      savedChunkIndexRef.current = savedChunkIndex;
-
-      console.log(`Document loaded: ${markdown.length} chars`);
+      console.log(`Document loaded: ${content.length} chars`);
     } catch (error) {
       console.error('Error loading document:', error);
       Alert.alert('Error', 'Failed to load document');
@@ -329,35 +244,6 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
     }
   };
 
-  // ============================================================================
-  // CHUNK LOADING CALLBACKS
-  // ============================================================================
-
-  /**
-   * Load more content when scrolling near bottom
-   */
-  const handleScrollNearEnd = () => {
-    // Don't load during TOC navigation
-    if (isTocNavigatingRef.current) return;
-
-    const newChunk = loadMoreContent();
-    if (newChunk) {
-      webViewRef.current?.appendContent(newChunk);
-    }
-  };
-
-  /**
-   * Load previous content when scrolling near top
-   */
-  const handleScrollNearStart = () => {
-    // Don't load during TOC navigation
-    if (isTocNavigatingRef.current) return;
-
-    const newChunk = loadPreviousContent();
-    if (newChunk) {
-      webViewRef.current?.prependContent(newChunk);
-    }
-  };
 
   // ============================================================================
   // WEBVIEW CALLBACKS
@@ -393,17 +279,6 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
       })();
     };
   }, [document.id]);
-
-  // Load initial chunks when fullMarkdown is set
-  useEffect(() => {
-    if (fullMarkdown && fullMarkdown.length > 0 && !isReady) {
-      const initialContent = loadInitialChunks(savedChunkIndexRef.current, 3);
-      // Set the initial content in a ref so we don't trigger WebView recreation
-      initialContentRef.current = initialContent;
-      setIsReady(true);
-      console.log(`Loaded chunks starting at ${savedChunkIndexRef.current}, total ${totalChunks} chunks`);
-    }
-  }, [fullMarkdown]);
 
   // Auto-save position periodically
   useEffect(() => {
@@ -485,14 +360,12 @@ export const MarkdownReader: React.FC<MarkdownReaderProps> = ({
           {/* WebView */}
           <WebViewMarkdownReader
             ref={webViewRef}
-            markdown={initialContentRef.current}
+            markdown={markdown}
             fontSize={fontSize}
             baseUrl={baseUrl}
             onTextSelected={handleTextSelected}
             onImageModalStateChange={handleImageModalStateChange}
             onWebViewLoaded={handleWebViewLoaded}
-            onScrollNearEnd={handleScrollNearEnd}
-            onScrollNearStart={handleScrollNearStart}
           />
 
           {/* Right tap zone */}
