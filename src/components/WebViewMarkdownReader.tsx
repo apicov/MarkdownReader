@@ -4,6 +4,7 @@ import WebView from 'react-native-webview';
 import {useTheme} from '../contexts/ThemeContext';
 import {File, Directory, Paths} from 'expo-file-system';
 import {IMAGE_CLICK_LISTENER_SCRIPT, getImageClickListenerScript} from '../utils/webViewHelpers';
+import {MARKED_JS, KATEX_JS, KATEX_CSS, AUTO_RENDER_JS} from '../utils/bundledLibraries';
 
 interface WebViewMarkdownReaderProps {
   markdown: string;
@@ -57,10 +58,30 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+  <style>${KATEX_CSS}</style>
+  <script>
+    // Polyfill for Array.at() - not supported in Android 10 WebView
+    if (!Array.prototype.at) {
+      Array.prototype.at = function(index) {
+        if (index < 0) {
+          index = this.length + index;
+        }
+        return this[index];
+      };
+    }
+    // Polyfill for String.at() - not supported in Android 10 WebView
+    if (!String.prototype.at) {
+      String.prototype.at = function(index) {
+        if (index < 0) {
+          index = this.length + index;
+        }
+        return this[index];
+      };
+    }
+  </script>
+  <script>${MARKED_JS}</script>
+  <script>${KATEX_JS}</script>
+  <script>${AUTO_RENDER_JS}</script>
   <style>
     * {
       margin: 0;
@@ -384,6 +405,31 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
       });
     }
 
+    // Add error handler to catch any JavaScript errors
+    window.onerror = function(msg, url, lineNo, columnNo, error) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'error',
+        error: {
+          message: msg,
+          url: url,
+          lineNo: lineNo,
+          columnNo: columnNo,
+          stack: error ? error.stack : 'no stack'
+        }
+      }));
+      return false;
+    };
+
+    // Add promise rejection handler
+    window.addEventListener('unhandledrejection', function(event) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'error',
+        error: {
+          message: 'Unhandled promise rejection: ' + event.reason
+        }
+      }));
+    });
+
     // Signal that page is loaded
     window.ReactNativeWebView.postMessage(JSON.stringify({
       type: 'loaded'
@@ -527,8 +573,6 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
       } else if (data.type === 'scrollPosition' && scrollPositionResolverRef.current) {
         scrollPositionResolverRef.current(data.position);
         scrollPositionResolverRef.current = null;
-      } else if (data.type === 'debug') {
-        console.log(`[WebView Debug] ${data.message}`);
       }
     } catch (error) {
       console.error('Error parsing WebView message:', error);
@@ -683,6 +727,11 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
           allowFileAccessFromFileURLs={true}
           allowUniversalAccessFromFileURLs={true}
           onMessage={handleMessage}
+          onError={(syntheticEvent) => {
+            const { nativeEvent } = syntheticEvent;
+            console.error('WebView error:', nativeEvent);
+            setLoading(false);
+          }}
           style={styles.webview}
           showsVerticalScrollIndicator={true}
           showsHorizontalScrollIndicator={false}
