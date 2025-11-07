@@ -185,27 +185,77 @@ export const WebViewMarkdownReader = forwardRef<WebViewMarkdownReaderRef, WebVie
   </style>
 </head>
 <body>
+  <textarea id="markdown-data" style="display:none;">${markdown.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
   <div id="content"></div>
   <div id="imageModal">
     <img id="modalImage" />
   </div>
   <script>
-    // Render markdown
-    const markdown = ${JSON.stringify(markdown)};
-    document.getElementById('content').innerHTML = marked.parse(markdown);
+    // Render markdown - use textarea to handle large files and preserve HTML entities
+    let markdown = document.getElementById('markdown-data').value;
+
+    // Protect math blocks from markdown processing by temporarily replacing them
+    const mathBlocks = [];
+    let mathIndex = 0;
+
+    // Store display math blocks ($$...$$)
+    markdown = markdown.replace(/\\$\\$([\\s\\S]*?)\\$\\$/g, (match, content) => {
+      const placeholder = '<!--MATH_BLOCK_' + mathIndex + '-->';
+      mathBlocks[mathIndex] = match;
+      mathIndex++;
+      return placeholder;
+    });
+
+    // Store inline math blocks ($...$)
+    markdown = markdown.replace(/\\$([^\\$\\n]+?)\\$/g, (match, content) => {
+      const placeholder = '<!--MATH_INLINE_' + mathIndex + '-->';
+      mathBlocks[mathIndex] = match;
+      mathIndex++;
+      return placeholder;
+    });
+
+    // Configure marked to allow HTML tags in markdown
+    marked.use({
+      mangle: false,
+      headerIds: false,
+      breaks: true,
+      gfm: true
+    });
+
+    let html = marked.parse(markdown, { async: false });
+
+    // Restore math blocks
+    html = html.replace(/<!--MATH_(BLOCK|INLINE)_(\\d+)-->/g, (match, type, index) => {
+      return mathBlocks[parseInt(index)];
+    });
+
+    document.getElementById('content').innerHTML = html;
 
     // Render LaTeX with KaTeX
-    renderMathInElement(document.getElementById('content'), {
-      delimiters: [
-        {left: '$$', right: '$$', display: true},
-        {left: '$', right: '$', display: false},
-        {left: '\\\\[', right: '\\\\]', display: true},
-        {left: '\\\\(', right: '\\\\)', display: false}
-      ],
-      throwOnError: false,
-      errorColor: '#cc0000',
-      strict: false
-    });
+    try {
+      renderMathInElement(document.getElementById('content'), {
+        delimiters: [
+          {left: '$$', right: '$$', display: true},
+          {left: '$', right: '$', display: false},
+          {left: '\\\\[', right: '\\\\]', display: true},
+          {left: '\\\\(', right: '\\\\)', display: false}
+        ],
+        throwOnError: false,
+        errorColor: '#cc0000',
+        strict: false,
+        trust: (context) => ['\\htmlId', '\\href'].includes(context.command),
+        macros: {
+          "\\eqref": "\\href{###1}{}",
+          "\\label": "\\href{###1}{}",
+          "\\require": "\\href{###1}{}"
+        },
+        errorCallback: (msg, err) => {
+          console.error('KaTeX error:', msg, err);
+        }
+      });
+    } catch (error) {
+      console.error('KaTeX rendering failed:', error);
+    }
 
     // Add IDs to headings after rendering for TOC navigation
     const headings = document.querySelectorAll('#content h1, #content h2, #content h3, #content h4, #content h5, #content h6');
